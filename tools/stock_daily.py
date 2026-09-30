@@ -9,6 +9,15 @@
   python3 tools/stock_daily.py index                            … stock/index.json を作り直す
   python3 tools/stock_daily.py status                           … 在庫の一覧
   python3 tools/stock_daily.py push  "<コミットの説明>"          … git add / commit / push（GITHUB_TOKEN があればそれで認証）
+  python3 tools/stock_daily.py control                          … 版の保護（stock/control.json）の現在の内容を表示
+  python3 tools/stock_daily.py control revoke <版番号>            … その版のアプリを止める（次の点呼で全画面の案内になる）
+  python3 tools/stock_daily.py control unrevoke <版番号>          … 止めるのをやめる
+  python3 tools/stock_daily.py control min <版番号|->             … その版より古い版をすべて止める（- で解除）。テスターに配ったファイル版も止まるので注意
+  python3 tools/stock_daily.py control tester-revoke <ID>         … そのテスターコード（ID）を無効にする（漏れたコードだけ止める。アプリは通常版に戻る）
+  python3 tools/stock_daily.py control tester-unrevoke <ID>
+  python3 tools/stock_daily.py control extend <版番号> <YYYY-MM-DD> … その版の有効期限を延ばす
+  python3 tools/stock_daily.py control notice "<文>"              … アプリのホームに出すお知らせ（"" で消す）
+  ※ control を変えたら push で GitHub に上げる。版番号はアプリの「設定」→ バージョン情報の「版 YYYYMMDD-HHMM」
 
 ファイルの形式は tools/生成の指示文.md を参照。
 """
@@ -20,6 +29,7 @@ PENDING = os.path.join(STOCK, 'pending')
 APPROVED = os.path.join(STOCK, 'approved')
 HOLD = os.path.join(STOCK, 'hold.txt')
 INDEX = os.path.join(STOCK, 'index.json')
+CONTROL = os.path.join(STOCK, 'control.json')  # 版の保護：止める版・無効にしたテスターID・期限の延長・お知らせ
 BASE_TEXTS = os.path.join(ROOT, 'tools', 'base_texts.json')  # アプリに最初から入っている文（重複チェック用）
 
 GENRES = ['daily', 'novel', 'news', 'essay', 'culture']
@@ -283,6 +293,63 @@ def cmd_status():
     return 0
 
 
+def load_control():
+    base = {'updated': '', 'minBuild': '', 'revoked': [], 'revokedTesters': [], 'extend': {}, 'notice': ''}
+    if os.path.exists(CONTROL):
+        try:
+            base.update(load_json(CONTROL))
+        except Exception as e:
+            print('control.json が読めません: %s' % e)
+    return base
+
+
+def save_control(c):
+    c['updated'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+    save_json(CONTROL, c)
+
+
+def cmd_control(args):
+    c = load_control()
+    if not args:
+        print('版の保護（stock/control.json）')
+        print('  更新: %s' % (c.get('updated') or '—'))
+        print('  minBuild（これより古い版は止まる）: %s' % (c.get('minBuild') or 'なし'))
+        print('  revoked（止める版）: %s' % (', '.join(c.get('revoked') or []) or 'なし'))
+        print('  revokedTesters（無効にしたテスターID）: %s' % (', '.join(c.get('revokedTesters') or []) or 'なし'))
+        print('  extend（期限の延長）: %s' % (', '.join('%s→%s' % kv for kv in sorted((c.get('extend') or {}).items())) or 'なし'))
+        print('  notice（お知らせ）: %s' % (c.get('notice') or 'なし'))
+        return 0
+    sub = args[0]; rest = args[1:]
+    if sub == 'revoke' and rest:
+        for b in rest:
+            if b not in c['revoked']: c['revoked'].append(b)
+        save_control(c); print('止める版に追加しました: %s' % ', '.join(rest)); return 0
+    if sub == 'unrevoke' and rest:
+        c['revoked'] = [b for b in c['revoked'] if b not in rest]
+        save_control(c); print('止めるのをやめました: %s' % ', '.join(rest)); return 0
+    if sub == 'min' and rest:
+        c['minBuild'] = '' if rest[0] == '-' else rest[0]
+        save_control(c); print('minBuild を %s にしました' % (c['minBuild'] or '解除')); return 0
+    if sub == 'tester-revoke' and rest:
+        for t in rest:
+            t = t.upper()
+            if t not in c['revokedTesters']: c['revokedTesters'].append(t)
+        save_control(c); print('無効にしたテスターID: %s' % ', '.join(c['revokedTesters'])); return 0
+    if sub == 'tester-unrevoke' and rest:
+        up = [t.upper() for t in rest]
+        c['revokedTesters'] = [t for t in c['revokedTesters'] if t not in up]
+        save_control(c); print('無効を解除しました: %s' % ', '.join(up)); return 0
+    if sub == 'extend' and len(rest) >= 2:
+        if not re.match(r'^\d{4}-\d{2}-\d{2}$', rest[1]):
+            print('日付は YYYY-MM-DD で'); return 2
+        c['extend'][rest[0]] = rest[1]
+        save_control(c); print('版 %s の期限を %s まで延ばしました' % (rest[0], rest[1])); return 0
+    if sub == 'notice':
+        c['notice'] = rest[0] if rest else ''
+        save_control(c); print('お知らせ: %s' % (c['notice'] or '（消しました）')); return 0
+    print(__doc__); return 2
+
+
 def cmd_push(message):
     """stock/ の変更をコミットし、リモートの main ブランチへ直接 push する。
     どのブランチで作業していても main に入れる（HEAD:main）。まず通常の push（Claude の実行環境が
@@ -336,4 +403,6 @@ if __name__ == '__main__':
         sys.exit(cmd_status())
     if cmd == 'push':
         sys.exit(cmd_push(args[1] if len(args) >= 2 else '新作ストックの更新'))
+    if cmd == 'control':
+        sys.exit(cmd_control(args[1:]))
     print(__doc__); sys.exit(2)
