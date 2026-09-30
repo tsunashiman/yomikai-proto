@@ -1,0 +1,38 @@
+PWA公開用 一式（論理的読解タイムアタック 試作版）
+==================================================
+
+このフォルダの中身をそのまま Web サーバー（https）に置くと、
+Android の Chrome では「アプリをインストール」、PC の Chrome／Edge では
+アドレスバーの「インストール」から、アプリとして入れられます。
+
+■ この試作版の公開先（設定済み）
+ ・置き場所（GitHub）  ：https://github.com/tsunashiman/yomikai-proto
+ ・アプリの URL        ：https://tsunashiman.github.io/yomikai-proto/
+ ・更新版を置くときは、このフォルダの中身を上の置き場所にアップロードし直します（Claude に頼めば代行します）。
+
+■ 別の場所に置くとき（GitHub Pages・無料・約10分）
+ 1. https://github.com にログイン（アカウントがなければ作成）
+ 2. 右上「＋」→「New repository」。名前は例：yomikai-proto、Public を選び Create
+ 3. 「uploading an existing file」を押し、このフォルダの中の全ファイル
+    （index.html / manifest.webmanifest / sw.js / png 4枚）をドラッグ＆ドロップ → Commit changes
+ 4. リポジトリの Settings → Pages → Branch を「main」「/(root)」にして Save
+ 5. 1〜2分後に表示される URL（https://ユーザー名.github.io/yomikai-proto/）を開く
+
+■ Android での確認手順
+ 1. Chrome で上の URL を開く → ストア風の画面が出る
+ 2. 「インストール」を押す（ボタンが効かない場合は Chrome メニュー →「ホーム画面に追加」）
+ 3. ホーム画面のアイコンから起動 → ブラウザの枠なしで全画面で開けば成功
+ 4. 機内モードにしても起動できることを確認（オフライン対応）
+
+■ PC（Windows）での確認手順
+ 1. Chrome または Edge で URL を開く
+ 2. アドレスバー右端の「インストール」アイコン → インストール
+ 3. デスクトップ／スタートメニューのアイコンから、専用ウィンドウで起動すれば成功
+
+■ 注意
+ ・sw.js（オフライン用）は https で公開したときだけ動きます。ファイルをダブルクリックで開いた場合は動きません。
+ ・アプリ内の記録（スコア・チケット）はブラウザ内に保存されます。URL が変わると記録は引き継がれません。
+ ・更新版を置き直したときは、sw.js の CACHE 名（lrta-proto-v3）を v4 などに変えてください。
+ ・stock フォルダ（毎日の新作）と tools フォルダ（作成・検査のスクリプト）も一緒に置いてください。
+   使い方は tools/スケジュール実行の設定手順.md と stock/README_問題ストック.txt を参照。
+ ・.nojekyll は「置いたファイルをそのまま配信する」ための空の目印ファイルです。消さないでください。
