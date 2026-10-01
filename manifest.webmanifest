@@ -3,6 +3,7 @@
   "short_name": "論理読解TA",
   "description": "文章にひそむ論理的矛盾を見抜く速さを競う、読解タイムアタック。",
   "lang": "ja",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
