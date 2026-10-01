@@ -9,6 +9,7 @@
   python3 tools/stock_daily.py index                            … stock/index.json を作り直す
   python3 tools/stock_daily.py status                           … 在庫の一覧
   python3 tools/stock_daily.py push  "<コミットの説明>"          … git add / commit / push（GITHUB_TOKEN があればそれで認証）
+  python3 tools/stock_daily.py daily <日付> <daily.json>          … その日付のファイル（pending か approved）にランキング用20問（daily）を入れる／差し替える
   python3 tools/stock_daily.py control                          … 版の保護（stock/control.json）の現在の内容を表示
   python3 tools/stock_daily.py control revoke <版番号>            … その版のアプリを止める（次の点呼で全画面の案内になる）
   python3 tools/stock_daily.py control unrevoke <版番号>          … 止めるのをやめる
@@ -38,6 +39,12 @@ READ_LEN = {'B': (15, 35), 'C': (18, 45), 'D': (40, 80)}
 READ_KINDS = ['entail', 'contra']
 TARGET = {'drills': 30, 'reads': 10}
 MIN_OK = {'drills': 20, 'reads': 6}
+# ランキング用（daily）：全員が同じ20問。長さの内訳はアプリの DAILY_PLAN と同じ（速読 A8/B3/C2/D1＝14、読解 B3/C2/D1＝6）
+DAILY_PLAN = {'drills': {'A': 8, 'B': 3, 'C': 2, 'D': 1}, 'reads': {'B': 3, 'C': 2, 'D': 1}}
+
+
+def jst_now():
+    return datetime.datetime.utcnow() + datetime.timedelta(hours=9)
 
 
 def load_json(path):
@@ -68,7 +75,8 @@ def known_texts(exclude_file=None):
                 data = load_json(p)
             except Exception:
                 continue
-            for it in data.get('drills', []) + data.get('reads', []):
+            daily = data.get('daily') if isinstance(data.get('daily'), dict) else {}
+            for it in data.get('drills', []) + data.get('reads', []) + daily.get('drills', []) + daily.get('reads', []):
                 if isinstance(it, dict) and it.get('text'):
                     texts.add(it['text'])
     return texts
@@ -115,14 +123,13 @@ def validate(data, path_for_dup=None):
             warnings.append('%s: 文末が「。」で終わっていません「%s」' % (where, t))
         return t
 
-    for i, it in enumerate(drills):
-        where = 'drills[%d]' % i
+    def check_drill(it, where):
         if not isinstance(it, dict):
-            errors.append(where + ': オブジェクトではありません'); continue
+            errors.append(where + ': オブジェクトではありません'); return
         t = check_text(it, where, DRILL_LEN)
         qs = it.get('qs')
         if not isinstance(qs, list) or not (2 <= len(qs) <= 4):
-            errors.append(where + ': qs（問い）は 2〜4 個'); continue
+            errors.append(where + ': qs（問い）は 2〜4 個'); return
         answers = set()
         for j, q in enumerate(qs):
             w = '%s.qs[%d]' % (where, j)
@@ -156,20 +163,19 @@ def validate(data, path_for_dup=None):
                 if len(x) > max(12, len(a) * 3):
                     warnings.append(w + ': 誤答「%s」が正答に比べて長すぎます' % x)
 
-    for i, it in enumerate(reads):
-        where = 'reads[%d]' % i
+    def check_read(it, where):
         if not isinstance(it, dict):
-            errors.append(where + ': オブジェクトではありません'); continue
+            errors.append(where + ': オブジェクトではありません'); return
         t = check_text(it, where, READ_LEN)
         kind = it.get('kind')
         if kind not in READ_KINDS:
-            errors.append(where + ': kind は entail / contra'); continue
+            errors.append(where + ': kind は entail / contra'); return
         q, a, d, why = it.get('q'), it.get('a', ''), it.get('d'), it.get('why')
         if not isinstance(q, str) or not q.strip():
             errors.append(where + ': q（質問文）がありません')
         need = 2 if kind == 'contra' and not it.get('none') else 3
         if not isinstance(d, list) or len(d) < need:
-            errors.append(where + ': d（誤答）は %d 個以上' % need); continue
+            errors.append(where + ': d（誤答）は %d 個以上' % need); return
         if len(set(d)) != len(d):
             errors.append(where + ': 誤答が重複しています')
         if kind == 'contra' and it.get('none'):
@@ -186,6 +192,34 @@ def validate(data, path_for_dup=None):
             errors.append(where + ': why（解説）を 8 字以上で書いてください')
         if kind == 'contra' and it.get('lv') != 'D':
             warnings.append(where + ': 矛盾探しは四節以上（D）に置いています')
+
+    for i, it in enumerate(drills):
+        check_drill(it, 'drills[%d]' % i)
+    for i, it in enumerate(reads):
+        check_read(it, 'reads[%d]' % i)
+
+    # ランキング用（daily）：全員が同じ20問。無ければ基本問題で代用されるので注意止まり、あれば内訳は厳密に
+    daily = data.get('daily')
+    if daily is None:
+        warnings.append('ランキング用（daily）がありません。この日は基本問題から選んだ20問で代用されます')
+    elif not isinstance(daily, dict) or not isinstance(daily.get('drills'), list) or not isinstance(daily.get('reads'), list):
+        errors.append('daily は {"drills": [...14本], "reads": [...6問]} の形にしてください')
+    else:
+        for i, it in enumerate(daily['drills']):
+            check_drill(it, 'daily.drills[%d]' % i)
+        for i, it in enumerate(daily['reads']):
+            check_read(it, 'daily.reads[%d]' % i)
+        for key in ('drills', 'reads'):
+            cnt = {}
+            for it in daily[key]:
+                if isinstance(it, dict):
+                    cnt[it.get('lv')] = cnt.get(it.get('lv'), 0) + 1
+            want = DAILY_PLAN[key]
+            if cnt != want:
+                errors.append('daily.%s の長さの内訳は %s にしてください（いま %s）' % (key, want, cnt))
+        gd = set(it.get('g') for it in daily['drills'] + daily['reads'] if isinstance(it, dict))
+        if len(gd) < 3:
+            warnings.append('daily の分野が %d 種類しかありません（3 種類以上を推奨）' % len(gd))
 
     # 本数・配分
     if len(drills) < MIN_OK['drills']:
@@ -219,7 +253,8 @@ def cmd_validate(path, quiet=False):
     if errors:
         print('=> 不合格（%d 件）。直してから再度 validate してください' % len(errors)); return 1
     if not quiet:
-        print('=> 合格：%s 速読 %d 文（問い %d）・読解 %d 問・注意 %d 件' % (data.get('date'), len(data['drills']), sum(len(d['qs']) for d in data['drills']), len(data['reads']), len(warnings)))
+        dl = data.get('daily') if isinstance(data.get('daily'), dict) else None
+        print('=> 合格：%s 速読 %d 文（問い %d）・読解 %d 問・ランキング用 %s・注意 %d 件' % (data.get('date'), len(data['drills']), sum(len(d['qs']) for d in data['drills']), len(data['reads']), ('速読 %d・読解 %d' % (len(dl.get('drills', [])), len(dl.get('reads', []))) if dl else 'なし'), len(warnings)))
     return 0
 
 
@@ -245,7 +280,10 @@ def holds():
 
 
 def cmd_promote(today=None):
-    today = today or datetime.date.today().isoformat()
+    """pending のうち「日付が明日（日本時間）以前」で hold.txt にない分を approved へ。
+    翌日分を前日に配るのは、ランキング用の20問を日付が変わった瞬間から全員に使えるようにするため"""
+    today = today or jst_now().date().isoformat()
+    limit = (datetime.date.fromisoformat(today) + datetime.timedelta(days=1)).isoformat()
     os.makedirs(APPROVED, exist_ok=True); os.makedirs(PENDING, exist_ok=True)
     held = holds(); moved = []
     for fn in sorted(os.listdir(PENDING)):
@@ -254,8 +292,8 @@ def cmd_promote(today=None):
         date = fn[:-5]
         if date in held:
             print('保留中（hold.txt）: ' + date); continue
-        if date > today:
-            print('まだ日付が来ていません: ' + date); continue
+        if date > limit:
+            print('まだ配る日ではありません（前日の朝に配ります）: ' + date); continue
         data = load_json(os.path.join(PENDING, fn))
         errors, _ = validate(data, os.path.join(PENDING, fn))
         if errors:
@@ -276,7 +314,8 @@ def cmd_index():
     for fn in sorted(os.listdir(APPROVED)):
         if fn.endswith('.json') and re.fullmatch(r'\d{4}-\d{2}-\d{2}\.json', fn):
             data = load_json(os.path.join(APPROVED, fn))
-            days.append({'date': fn[:-5], 'drills': len(data.get('drills', [])), 'reads': len(data.get('reads', []))})
+            dl = data.get('daily') if isinstance(data.get('daily'), dict) else None
+            days.append({'date': fn[:-5], 'drills': len(data.get('drills', [])), 'reads': len(data.get('reads', [])), 'daily': bool(dl and len(dl.get('drills', [])) == 14 and len(dl.get('reads', [])) == 6)})
     index = {'updated': datetime.datetime.now().isoformat(timespec='seconds'), 'approved': [d['date'] for d in days], 'days': days}
     save_json(INDEX, index)
     print('index.json を更新: approved %d 日分' % len(days))
@@ -290,6 +329,37 @@ def cmd_status():
         print('%s: %d 日分 %s' % (name, len(files), ', '.join(f[:-5] for f in files)))
     h = holds()
     print('保留（hold.txt）: %s' % (', '.join(sorted(h)) if h else 'なし'))
+    return 0
+
+
+def cmd_daily(date, path):
+    """既存の日付ファイルにランキング用20問を入れる（差し替えも可）。検査に通らなければ書き換えない"""
+    target = None
+    for d in (PENDING, APPROVED):
+        p = os.path.join(d, date + '.json')
+        if os.path.exists(p):
+            target = p; break
+    if not target:
+        print('NG: %s の日付ファイルが pending にも approved にもありません' % date); return 1
+    try:
+        daily = load_json(path)
+    except Exception as e:
+        print('NG: JSON として読めません: %s' % e); return 1
+    if isinstance(daily, dict) and 'daily' in daily and isinstance(daily['daily'], dict):
+        daily = daily['daily']
+    data = load_json(target)
+    data['daily'] = daily
+    errors, warnings = validate(data, target)
+    for w in warnings:
+        print('注意: ' + w)
+    for e in errors:
+        print('NG: ' + e)
+    if errors:
+        print('=> 不合格（%d 件）。ファイルは書き換えていません' % len(errors)); return 1
+    save_json(target, data)
+    if target.startswith(APPROVED):
+        cmd_index()
+    print('ランキング用20問を入れました: ' + os.path.relpath(target, ROOT))
     return 0
 
 
@@ -405,4 +475,6 @@ if __name__ == '__main__':
         sys.exit(cmd_push(args[1] if len(args) >= 2 else '新作ストックの更新'))
     if cmd == 'control':
         sys.exit(cmd_control(args[1:]))
+    if cmd == 'daily' and len(args) >= 3:
+        sys.exit(cmd_daily(args[1], args[2]))
     print(__doc__); sys.exit(2)
