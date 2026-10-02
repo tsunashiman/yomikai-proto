@@ -18,5 +18,17 @@
  "novel_D": 4,
  "news_D": 4,
  "essay_D": 4,
- "culture_D": 2
+ "culture_D": 2,
+ "hist_A": 3,
+ "hist_B": 3,
+ "hist_C": 2,
+ "hist_D": 2,
+ "sci_A": 3,
+ "sci_B": 3,
+ "sci_C": 2,
+ "sci_D": 2,
+ "civ_A": 3,
+ "civ_B": 3,
+ "civ_C": 2,
+ "civ_D": 2
 }

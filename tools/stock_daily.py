@@ -36,7 +36,22 @@ CONTROL = os.path.join(STOCK, 'control.json')  # 版の保護：止める版・�
 TOOLS = os.path.join(ROOT, 'tools')
 BASE_TEXTS = os.path.join(TOOLS, 'base_texts.json')  # アプリに最初から入っている文（重複チェック用）
 
-GENRES = ['daily', 'novel', 'news', 'essay', 'culture']
+GENRES = ['daily', 'novel', 'news', 'essay', 'culture', 'hist', 'sci', 'civ']   # hist/sci/civ は「学習」（入試・試験のような事実の文。ふりがな付き。v48）
+STUDY_GENRES = ['hist', 'sci', 'civ']   # 学習の分野：ランキング用（daily）と文の整備の計画（plan）には入れない
+# ふりがなの印：漢字《よみ》 または ｜語《よみ》（アプリは印を外した文と、ふりがな付きの文の両方を持つ）。検査は印を外した形で行う
+RUBY_RE = re.compile(r'(?:｜([^《》｜]+)|([\u4e00-\u9fff\u3400-\u4dbf々〆ヵヶ]+))《([^《》]+)》')
+
+
+def plain(v):
+    """ふりがなの印を外す（文字列以外はそのまま）"""
+    if not isinstance(v, str) or '《' not in v:
+        return v
+    return RUBY_RE.sub(lambda m: m.group(1) or m.group(2), v)
+
+
+def has_ruby(v):
+    return isinstance(v, str) and bool(RUBY_RE.search(v))
+
 DRILL_LEN = {'A': (8, 18), 'B': (15, 35), 'C': (18, 53), 'D': (36, 75)}
 READ_LEN = {'A': (8, 18), 'B': (15, 35), 'C': (18, 53), 'D': (36, 80)}  # 読解は速読の文に付けるので、長さの範囲は速読と同じ（D は少し長めも可）
 READ_KINDS = ['entail', 'contra']
@@ -71,7 +86,7 @@ def known_texts(exclude_file=None):
     """すでに使われている本文（初期バンク＋approved＋pending）"""
     texts = set()
     if os.path.exists(BASE_TEXTS):
-        texts.update(load_json(BASE_TEXTS))
+        texts.update(plain(t) for t in load_json(BASE_TEXTS))
     for d in (APPROVED, PENDING):
         if not os.path.isdir(d):
             continue
@@ -86,7 +101,7 @@ def known_texts(exclude_file=None):
             daily = data.get('daily') if isinstance(data.get('daily'), dict) else {}
             for it in data.get('drills', []) + data.get('reads', []) + daily.get('drills', []) + daily.get('reads', []):
                 if isinstance(it, dict) and it.get('text'):
-                    texts.add(it['text'])
+                    texts.add(plain(it['text']).strip())
     return texts
 
 
@@ -104,14 +119,25 @@ def validate(data, path_for_dup=None):
         return (['drills / reads は配列にしてください'], [])
     used = known_texts(path_for_dup)
     seen_here = set()
-    drill_texts_here = set(it.get('text', '').strip() for it in drills if isinstance(it, dict) and isinstance(it.get('text'), str))
+    drill_texts_here = set(plain(it.get('text', '')).strip() for it in drills if isinstance(it, dict) and isinstance(it.get('text'), str))
     read_qs_here = set()
 
     def check_text(it, where, ranges, attached_ok=False):
         t = it.get('text')
         if not isinstance(t, str) or not t.strip():
             errors.append('%s: text がありません' % where); return None
-        t = t.strip()
+        if has_ruby(t):
+            # ふりがなの印の形を確かめる（《 》の対応、印の中身が空でない、ひらがな以外の読み）
+            if t.count('《') != t.count('》'):
+                errors.append('%s: ふりがなの《 》の数が合いません「%s」' % (where, t))
+            for m in RUBY_RE.finditer(t):
+                if not re.fullmatch(r'[ぁ-ゖー]+', m.group(3)):
+                    warnings.append('%s: ふりがな「%s」にひらがな以外が入っています' % (where, m.group(3)))
+            if it.get('g') in STUDY_GENRES and re.search(r'[\u4e00-\u9fff]', plain(t)) and not re.search(r'[\u4e00-\u9fff]《', t):
+                warnings.append('%s: 学習の文ですが、ふりがなの印が付いていない漢字があります' % where)
+        elif it.get('g') in STUDY_GENRES and re.search(r'[\u4e00-\u9fff]', t):
+            warnings.append('%s: 学習（%s）の文は、すべての漢字に 漢字《よみ》 の形でふりがなを付けてください「%s」' % (where, it.get('g'), t))
+        t = plain(t).strip()
         attached = attached_ok and t in drill_texts_here  # 同じファイルの速読の文に付けた読解（本文の重複は問題ない）
         if not attached:
             if t in used:
@@ -151,7 +177,9 @@ def validate(data, path_for_dup=None):
             w = '%s.qs[%d]' % (where, j)
             if not isinstance(q, dict):
                 errors.append(w + ': オブジェクトではありません'); continue
-            qq, a, d, h = q.get('q'), q.get('a'), q.get('d'), q.get('h')
+            qq, a, d, h = plain(q.get('q')), plain(q.get('a')), q.get('d'), plain(q.get('h'))
+            if isinstance(d, list):
+                d = [plain(x) for x in d]
             if not isinstance(qq, str) or not qq.strip():
                 errors.append(w + ': q（質問文）がありません')
             elif not qq.rstrip().endswith('？'):
@@ -186,7 +214,9 @@ def validate(data, path_for_dup=None):
         kind = it.get('kind')
         if kind not in READ_KINDS:
             errors.append(where + ': kind は entail / contra'); return
-        q, a, d, why = it.get('q'), it.get('a', ''), it.get('d'), it.get('why')
+        q, a, d, why = plain(it.get('q')), plain(it.get('a', '')), it.get('d'), plain(it.get('why'))
+        if isinstance(d, list):
+            d = [plain(x) for x in d]
         if not isinstance(q, str) or not q.strip():
             errors.append(where + ': q（質問文）がありません')
         elif t:
@@ -213,7 +243,7 @@ def validate(data, path_for_dup=None):
         if kind == 'contra' and it.get('lv') != 'D':
             warnings.append(where + ': 矛盾探しは四節以上（D）に置いています')
         if t and t in drill_texts_here:
-            dl = next((x for x in drills if isinstance(x, dict) and x.get('text', '').strip() == t), None)
+            dl = next((x for x in drills if isinstance(x, dict) and plain(x.get('text', '')).strip() == t), None)
             if dl and dl.get('lv') != it.get('lv'):
                 errors.append(where + ': lv が同じ本文の速読の文と違います')
 
@@ -242,6 +272,8 @@ def validate(data, path_for_dup=None):
             if cnt != want:
                 errors.append('daily.%s の長さの内訳は %s にしてください（いま %s）' % (key, want, cnt))
         gd = set(it.get('g') for it in daily['drills'] + daily['reads'] if isinstance(it, dict))
+        if gd & set(STUDY_GENRES):
+            errors.append('daily（ランキング用）に学習の分野（%s）の文は入れません。一般の 5 分野だけにしてください' % '/'.join(sorted(gd & set(STUDY_GENRES))))
         if len(gd) < 3:
             warnings.append('daily の分野が %d 種類しかありません（3 種類以上を推奨）' % len(gd))
 
@@ -251,8 +283,9 @@ def validate(data, path_for_dup=None):
     rc = {}
     for it in reads:
         if isinstance(it, dict):
-            rc[it.get('text', '').strip()] = rc.get(it.get('text', '').strip(), 0) + 1
-    missing = [it.get('text') for it in drills if isinstance(it, dict) and it.get('lv') in ('B', 'C', 'D') and rc.get(it.get('text', '').strip(), 0) < 2]
+            k = plain(it.get('text', '')).strip()
+            rc[k] = rc.get(k, 0) + 1
+    missing = [plain(it.get('text')) for it in drills if isinstance(it, dict) and it.get('lv') in ('B', 'C', 'D') and rc.get(plain(it.get('text', '')).strip(), 0) < 2]
     if missing:
         warnings.append('二節以上なのに読解が 2 問未満の文が %d 本あります（例「%s」）' % (len(missing), missing[0]))
     return errors, warnings
@@ -307,7 +340,8 @@ def cmd_add(path):
 
 
 # ---------- 文の整備の計画（各分野×各長さ 100 文）：次に作るコマと数を出す ----------
-CELL_ORDER = [(g, lv) for g in GENRES for lv in 'ABCD']  # 分野1の各長さ → 分野2の各長さ → …
+PLAN_GENRES = [g for g in GENRES if g not in STUDY_GENRES]   # 文の整備の計画は一般の 5 分野だけ（学習の分野は別立てで、出典の確認を伴うため人手の指示で足す）
+CELL_ORDER = [(g, lv) for g in PLAN_GENRES for lv in 'ABCD']  # 分野1の各長さ → 分野2の各長さ → …
 
 
 def cell_counts():
@@ -352,8 +386,10 @@ def cmd_plan(args):
     remaining = {('%s_%s' % c): max(0, CELL_TARGET - counts.get('%s_%s' % c, 0)) for c in CELL_ORDER}
     done_all = all(v == 0 for v in remaining.values())
     if args and args[0] == 'status':
-        for g in GENRES:
+        for g in PLAN_GENRES:
             print(g.ljust(8) + '  '.join('%s:%3d/%d' % (lv, counts.get('%s_%s' % (g, lv), 0), CELL_TARGET) for lv in 'ABCD'))
+        st = {g: sum(counts.get('%s_%s' % (g, lv), 0) for lv in 'ABCD') for g in STUDY_GENRES}
+        print('学習（計画の対象外・人手の指示で足す）: ' + '  '.join('%s:%d 文' % (g, n) for g, n in st.items()))
         print('残り合計 %d 文。次のコマ: %s%s' % (sum(remaining.values()), CELL_ORDER[plan['next'] % len(CELL_ORDER)], '（全コマ達成 → 毎日各コマ %d 文の維持モード）' % MAINT_PER_CELL if done_all else ''))
         return 0
     if done_all:
@@ -403,6 +439,7 @@ REVIEW_INTRO = """# 速読・読解ドリルの問題チェックのお願い（
 - 速読・読解とも、**選択肢のうち正しいものは 1 つだけ**（観点 4）。誤答のどれかが正しいと、正答が 2 つある問題になってしまう。
 - 「読解」：本文を見ながら答える。**正解は本文だけから導けること**（観点 2）。正答は本文の言い換え・含意で、本文にそのままは書かれていない。
 - 〔ひねり〕と付いた問いは、数や順序の計算が要る意図的な変化球です（意外性のために入れています。計算が正しいかを重点的に確認してください）。
+- 「学習・歴史」「学習・理科」「学習・公民」の文は、入試・試験のような事実の文です。漢字の直後の《 》はふりがなで（例：鎌倉《かまくら》）、アプリでは印を外した文か、ふりがな付きの文として表示されます。**文の内容の点検は《 》を外した文で行い**、観点 9（事実の誤り）は年号・人名・数値・用語・しくみまで厳密に確かめてください（誤りの疑いがあれば、根拠となる出典を添えてください）。ふりがなの読みが誤っている・その文脈では別の読みが普通、という場合も観点 3 として指摘してください（幼稚園・小学校低学年の子が読むため）。
 
 ## 報告の形式（この形式で、問題のある問いだけを書いてください）
 ```
@@ -420,7 +457,7 @@ REVIEW_INTRO = """# 速読・読解ドリルの問題チェックのお願い（
 
 """
 LEVEL_NAME = {'A': '単文', 'B': '二節', 'C': '三節', 'D': '四節以上'}
-GENRE_NAME = {'daily': '日常会話', 'novel': '小説・エッセイ', 'news': 'ニュース', 'essay': '新聞・評論', 'culture': '教養'}
+GENRE_NAME = {'daily': '日常会話', 'novel': '小説・エッセイ', 'news': 'ニュース', 'essay': '新聞・評論', 'culture': '教養', 'hist': '学習・歴史', 'sci': '学習・理科', 'civ': '学習・公民'}
 
 
 def review_pack_text(data, date, title_note=''):
