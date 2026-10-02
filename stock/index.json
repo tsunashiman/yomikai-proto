@@ -1,5 +1,5 @@
 {
- "updated": "2026-10-01T19:10:17",
+ "updated": "2026-10-02T10:06:59",
  "approved": [
   "2026-10-01",
   "2026-10-02",
@@ -9,19 +9,22 @@
   {
    "date": "2026-10-01",
    "drills": 30,
-   "reads": 10,
+   "reads": 94,
+   "qs": 177,
    "daily": false
   },
   {
    "date": "2026-10-02",
    "drills": 30,
-   "reads": 10,
+   "reads": 84,
+   "qs": 187,
    "daily": true
   },
   {
    "date": "2026-10-03",
    "drills": 30,
-   "reads": 10,
+   "reads": 84,
+   "qs": 199,
    "daily": true
   }
  ]
