@@ -462,7 +462,7 @@ def review_pack_text(data, date, title_note=''):
         out.append('# ランキング用の20問（%s 分。全員が同じ順で解く）' % date)
         out.append('')
         sub = review_pack_text({'drills': dl.get('drills', []), 'reads': dl.get('reads', [])}, date)
-        out.append(sub.split('# 問題一覧', 1)[1].split('\n', 2)[2] if '# 問題一覧' in sub else sub)
+        out.append(sub.split('\n# 問題一覧（', 1)[1].split('\n', 2)[2] if '\n# 問題一覧（' in sub else sub)
     return '\n'.join(out)
 
 
