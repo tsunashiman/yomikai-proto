@@ -1,0 +1,22 @@
+{
+ "daily_A": 22,
+ "novel_A": 8,
+ "news_A": 8,
+ "essay_A": 8,
+ "culture_A": 8,
+ "daily_B": 16,
+ "novel_B": 8,
+ "news_B": 8,
+ "essay_B": 8,
+ "culture_B": 6,
+ "daily_C": 10,
+ "novel_C": 6,
+ "news_C": 6,
+ "essay_C": 6,
+ "culture_C": 4,
+ "daily_D": 4,
+ "novel_D": 4,
+ "news_D": 4,
+ "essay_D": 4,
+ "culture_D": 2
+}
