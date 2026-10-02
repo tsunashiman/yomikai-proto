@@ -531,7 +531,7 @@ def cmd_index():
         if fn.endswith('.json') and re.fullmatch(r'\d{4}-\d{2}-\d{2}\.json', fn):
             data = load_json(os.path.join(APPROVED, fn))
             dl = data.get('daily') if isinstance(data.get('daily'), dict) else None
-            days.append({'date': fn[:-5], 'drills': len(data.get('drills', [])), 'reads': len(data.get('reads', [])), 'daily': bool(dl and len(dl.get('drills', [])) == 14 and len(dl.get('reads', [])) == 6)})
+            days.append({'date': fn[:-5], 'drills': len(data.get('drills', [])), 'reads': len(data.get('reads', [])), 'qs': sum(len(x.get('qs', [])) for x in data.get('drills', [])), 'daily': bool(dl and len(dl.get('drills', [])) == 14 and len(dl.get('reads', [])) == 6)})  # qs：問いの総数（増えたらアプリが取り直す）
     index = {'updated': datetime.datetime.now().isoformat(timespec='seconds'), 'approved': [d['date'] for d in days], 'days': days}
     save_json(INDEX, index)
     print('index.json を更新: approved %d 日分' % len(days))
