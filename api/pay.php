@@ -15,7 +15,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
     $pc = payjp_cfg();
     out(['ok' => true, 'enabled' => $pc['enabled'], 'mode' => $pc['mode'], 'publicKey' => $pc['enabled'] ? $pc['public'] : '',
         'plans' => array_map(fn($p) => ['amount' => $p['amount'], 'interval' => $p['interval']], PAY_PLANS),
-        'tickets' => array_map(fn($t) => ['amount' => $t['amount'], 'n' => $t['n']], PAY_TICKETS), 'tds' => false]);
+        'tickets' => array_map(fn($t) => ['amount' => $t['amount'], 'n' => $t['n']], PAY_TICKETS), 'tds' => false, 'priceRev' => PAY_PRICE_REV]);
 }
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') fail('GET or POST only', 405);
 $pdo = db_or_503();
@@ -106,10 +106,11 @@ if ($action === 'subscribe') {
     payjp_apply_subscription($pdo, $aid, $sub, $plan);
     payjp_record_payment($pdo, $aid, 'subscribe', $plan, PAY_PLANS[$plan]['amount'], '', (string)$sub['id'], 'paid', '初回');
     $periodEnd = ts_to_jst(isset($sub['current_period_end']) ? (int)$sub['current_period_end'] : null);
-    $mode = payjp_cfg()['mode'] === 'live' ? '' : '【テスト環境のため実際の請求はありません】\n\n';
+    $mode = payjp_cfg()['mode'] === 'live' ? '' : "【テスト環境のため実際の請求はありません】\n\n";
     send_mail((string)$acc['email'], '【まじめに速読トレ】サブスクの登録を受け付けました', $mode . "まじめに速読トレ（Tsunashiman）です。\n\n"
-        . "サブスク（" . plan_label($plan) . "・" . number_format(PAY_PLANS[$plan]['amount']) . " 円・税込）の登録を受け付けました。ありがとうございます。\n"
+        . plan_label($plan) . "・" . number_format(PAY_PLANS[$plan]['amount']) . " 円（税込）の登録を受け付けました。ありがとうございます。\n"
         . "次回の更新日：" . ($periodEnd ? substr($periodEnd, 0, 10) : '—') . "（この日に自動で更新・請求されます）\n\n"
+        . "料金を改定することがあっても、継続中のあいだはご加入時の料金（" . number_format(PAY_PLANS[$plan]['amount']) . " 円）のままです（ご自身で解約した後に再加入する場合は、そのときの料金になります。値下げのときは継続中の方にも新しい料金を適用します）。\n"
         . "解約はいつでも、アプリの「チケット・サブスク」または設定の「アカウント」からできます。解約後は次回更新日以降の請求が止まり、期間の終わりまで引き続きお使いいただけます。\n"
         . "カード明細には PAY.JP 経由の請求として表示されます。\n\n— Tsunashiman（ツナシマン）\n" . mail_reply() . "\n");
     $done(['subscribed' => true]);
@@ -135,7 +136,7 @@ if ($action === 'resume') {
     $r = payjp_request('POST', 'subscriptions/' . rawurlencode((string)$e['ref']) . '/resume');
     if (!$r['ok']) $payErr($r, 'subscriptions.resume');
     payjp_apply_subscription($pdo, $aid, $r['data']);
-    if ($e['status'] === 'past_due') payjp_record_payment($pdo, $aid, 'renew', (string)$e['plan'], PAY_PLANS[(string)$e['plan']]['amount'] ?? 0, '', (string)$e['ref'], 'paid', '再開');
+    if ($e['status'] === 'past_due') payjp_record_payment($pdo, $aid, 'renew', (string)$e['plan'], (int)($r['data']['plan']['amount'] ?? 0) ?: ((int)($e['amount'] ?? 0) ?: (int)(PAY_PLANS[(string)$e['plan']]['amount'] ?? 0)), '', (string)$e['ref'], 'paid', '再開');
     $done(['resumed' => true]);
 }
 

@@ -6,7 +6,7 @@
 declare(strict_types=1);
 
 const APP_ID = 'yomikai';
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const SECRETS_FILE = '/home/tsunashiman/secrets/db.json';
 
 date_default_timezone_set('Asia/Tokyo');
@@ -307,6 +307,15 @@ function ddl_v3(): array
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
     ];
 }
+/* v4（v61）：料金の据え置き。entitlements に「実際に請求している金額」と「加入時の料金表の世代」を持つ
+   （値上げしても継続中の人はこの金額のまま。アプリの表示と売上の記録に使う） */
+function ddl_v4(): array
+{
+    return [
+        "ALTER TABLE `entitlements` ADD COLUMN `amount` INT NOT NULL DEFAULT 0",
+        "ALTER TABLE `entitlements` ADD COLUMN `price_rev` TINYINT NOT NULL DEFAULT 0",
+    ];
+}
 function exec_ignore(PDO $pdo, string $sql, array $ignoreCodes): void
 {
     try { $pdo->exec($sql); }
@@ -322,6 +331,7 @@ function migrate(PDO $pdo): void
     if ($v < 1) foreach (ddl_v1() as $sql) $pdo->exec($sql);
     if ($v < 2) foreach (ddl_v2() as $sql) $pdo->exec($sql);
     if ($v < 3) foreach (ddl_v3() as $sql) exec_ignore($pdo, $sql, ['1060', '1061', '1050']); /* 列・索引・表が既にある（1060／1061／1050）は無視 */
+    if ($v < 4) foreach (ddl_v4() as $sql) exec_ignore($pdo, $sql, ['1060']);
     $pdo->prepare('INSERT INTO `schema_version` (`id`, `v`, `at`) VALUES (1, ?, NOW()) ON DUPLICATE KEY UPDATE `v` = ?, `at` = NOW()')->execute([SCHEMA_VERSION, SCHEMA_VERSION]);
 }
 
@@ -343,11 +353,14 @@ function account_info(PDO $pdo, int $accountId): ?array
 {
     $st = $pdo->prepare('SELECT `id`, `email`, `created_at`, `last_login_at`, `payjp_customer` FROM `accounts` WHERE `id` = ?'); $st->execute([$accountId]);
     $a = $st->fetch(); if (!$a) return null;
-    $st = $pdo->prepare('SELECT `plan`, `until`, `source`, `ref`, `status`, `updated_at`, `period_end`, `canceled_at`, `tickets_granted`, `card_brand`, `card_last4` FROM `entitlements` WHERE `account_id` = ? AND `app_id` = ?'); $st->execute([$accountId, APP_ID]);
+    $st = $pdo->prepare('SELECT `plan`, `until`, `source`, `ref`, `status`, `updated_at`, `period_end`, `canceled_at`, `tickets_granted`, `card_brand`, `card_last4`, `amount`, `price_rev` FROM `entitlements` WHERE `account_id` = ? AND `app_id` = ?'); $st->execute([$accountId, APP_ID]);
     $e = $st->fetch() ?: null;
     $sub = null;
     if ($e && $e['source'] === 'payjp' && $e['ref'] !== '') {
-        $sub = ['status' => $e['status'], 'periodEnd' => $e['period_end'] ? substr((string)$e['period_end'], 0, 16) : null, 'canceled' => !empty($e['canceled_at']), 'card' => trim(($e['card_brand'] ?? '') . ' ' . ($e['card_last4'] !== '' ? '****' . $e['card_last4'] : ''))];
+        /* amount＝その人が実際に払っている金額、listAmount＝いまの料金表。据え置き中（grandfathered）は amount < listAmount */
+        $list = (int)(PAY_PLANS[(string)$e['plan']]['amount'] ?? 0); $amt = (int)$e['amount'] ?: $list;
+        $sub = ['status' => $e['status'], 'periodEnd' => $e['period_end'] ? substr((string)$e['period_end'], 0, 16) : null, 'canceled' => !empty($e['canceled_at']), 'card' => trim(($e['card_brand'] ?? '') . ' ' . ($e['card_last4'] !== '' ? '****' . $e['card_last4'] : '')),
+            'amount' => $amt, 'listAmount' => $list, 'grandfathered' => $amt > 0 && $list > 0 && $amt < $list, 'priceRev' => (int)$e['price_rev']];
     }
     return ['email' => $a['email'], 'since' => substr((string)$a['created_at'], 0, 10), 'plan' => $e ? $e['plan'] : 'free', 'planLabel' => plan_label($e ? $e['plan'] : 'free'), 'until' => $e && $e['until'] ? (string)$e['until'] : null, 'source' => $e ? $e['source'] : '', 'pro' => plan_is_pro($e),
         'sub' => $sub, 'ticketsGranted' => $e ? (int)$e['tickets_granted'] : 0, 'hasCard' => (string)($a['payjp_customer'] ?? '') !== ''];
@@ -440,7 +453,19 @@ function err_kind(Throwable $e): string
    秘密鍵が無ければ決済機能は無効（アプリは従来どおり模擬の購入画面のまま）。
    価格はここ（サーバー側）だけで決める。アプリから送られた金額は使わない。
    db.json に "payjp_mode": "mock" があると PAY.JP に通信せず、secrets/payjp_mock.json に状態を持つ偽物で動く（手元のテスト用）。 */
-const PAY_PLANS = ['month' => ['amount' => 500, 'interval' => 'month', 'name' => 'まじめに速読トレ サブスク（月額）'], 'year' => ['amount' => 5000, 'interval' => 'year', 'name' => 'まじめに速読トレ サブスク（年額）']];
+/* 料金表の世代（v61）。値上げ・値下げのときは PAY_PRICE_HISTORY に新しい世代を足して PAY_PRICE_REV を進める。
+   PAY.JP のプラン ID には金額が入る（yomikai_month_500 など）ので、値上げすると新しいプランができ、既存の定期課金は元のプラン（元の金額）のまま更新され続ける
+   ＝継続中の人は加入時の料金で据え置き。解約して定期課金が消えた後の再加入は、そのときの料金表で新しく作られる。
+   値下げのときは逆に、継続中の人も新しい料金に移す（PAY.JP の定期課金の next_cycle_plan で次回更新から新プランへ。管理ページの「PAY.JP と照合」の後に手で行う）。 */
+const PAY_PRICE_HISTORY = [1 => ['month' => 500, 'year' => 5000]];
+const PAY_PRICE_REV = 1;
+const PAY_PLANS = ['month' => ['amount' => PAY_PRICE_HISTORY[PAY_PRICE_REV]['month'], 'interval' => 'month', 'name' => 'まじめに速読トレ サブスク（月額）'], 'year' => ['amount' => PAY_PRICE_HISTORY[PAY_PRICE_REV]['year'], 'interval' => 'year', 'name' => 'まじめに速読トレ サブスク（年額）']];
+/* 金額から料金表の世代を推定（新しい世代から探す。どの世代にも無い金額なら今の世代） */
+function payjp_price_rev_of(string $plan, int $amount): int
+{
+    if ($amount > 0) foreach (array_reverse(PAY_PRICE_HISTORY, true) as $rev => $t) if (($t[$plan] ?? -1) === $amount) return (int)$rev;
+    return PAY_PRICE_REV;
+}
 const PAY_TICKETS = ['t5' => ['amount' => 500, 'n' => 5, 'name' => 'チケット 5 枚'], 't10' => ['amount' => 900, 'n' => 10, 'name' => 'チケット 10 枚']];
 const PAY_GRACE_DAYS = 2; /* 更新の遅れ（PAY.JP は current_period_end ちょうどには更新しない）を吸収するための猶予 */
 
@@ -523,10 +548,15 @@ function payjp_apply_subscription(PDO $pdo, int $aid, array $sub, ?string $planK
     elseif ($status === 'canceled') { $st = 'active'; $until = $endDate; } /* 期間末まで使える */
     elseif ($status === 'paused') { $st = 'past_due'; $until = $endDate; } /* 支払い失敗：止める（カードを更新して再開） */
     else { $st = 'ended'; $until = date_add_days(today(), -1); }
-    $pdo->prepare('INSERT INTO `entitlements` (`account_id`, `app_id`, `plan`, `until`, `source`, `ref`, `status`, `updated_at`, `period_end`, `canceled_at`, `synced_at`, `note`)
-        VALUES (?, ?, ?, ?, \'payjp\', ?, ?, NOW(), ?, ?, NOW(), \'\')
-        ON DUPLICATE KEY UPDATE `plan` = VALUES(`plan`), `until` = VALUES(`until`), `source` = \'payjp\', `ref` = VALUES(`ref`), `status` = VALUES(`status`), `updated_at` = NOW(), `period_end` = VALUES(`period_end`), `canceled_at` = VALUES(`canceled_at`), `synced_at` = NOW()')
-        ->execute([$aid, APP_ID, $planKey, $until, (string)($sub['id'] ?? ''), $st, $periodEnd, $canceled ? (ts_to_jst(isset($sub['canceled_at']) ? (int)$sub['canceled_at'] : null) ?? now3()) : null]);
+    /* 実際に請求している金額は PAY.JP 側のプランから（値上げ後も、継続中の人は加入時の金額のまま）。料金表の世代は同じ定期課金が続くあいだ変えない */
+    $subId = (string)($sub['id'] ?? '');
+    $amount = (int)($sub['plan']['amount'] ?? 0) ?: (int)(PAY_PLANS[$planKey]['amount'] ?? 0);
+    $st0 = $pdo->prepare('SELECT `ref`, `price_rev` FROM `entitlements` WHERE `account_id` = ? AND `app_id` = ?'); $st0->execute([$aid, APP_ID]); $old = $st0->fetch();
+    $rev = ($old && (string)$old['ref'] === $subId && (int)$old['price_rev'] > 0) ? (int)$old['price_rev'] : payjp_price_rev_of($planKey, $amount);
+    $pdo->prepare('INSERT INTO `entitlements` (`account_id`, `app_id`, `plan`, `until`, `source`, `ref`, `status`, `updated_at`, `period_end`, `canceled_at`, `synced_at`, `note`, `amount`, `price_rev`)
+        VALUES (?, ?, ?, ?, \'payjp\', ?, ?, NOW(), ?, ?, NOW(), \'\', ?, ?)
+        ON DUPLICATE KEY UPDATE `plan` = VALUES(`plan`), `until` = VALUES(`until`), `source` = \'payjp\', `ref` = VALUES(`ref`), `status` = VALUES(`status`), `updated_at` = NOW(), `period_end` = VALUES(`period_end`), `canceled_at` = VALUES(`canceled_at`), `synced_at` = NOW(), `amount` = VALUES(`amount`), `price_rev` = VALUES(`price_rev`)')
+        ->execute([$aid, APP_ID, $planKey, $until, $subId, $st, $periodEnd, $canceled ? (ts_to_jst(isset($sub['canceled_at']) ? (int)$sub['canceled_at'] : null) ?? now3()) : null, $amount, $rev]);
 }
 function payjp_record_payment(PDO $pdo, int $aid, string $kind, string $plan, int $amount, string $charge, string $sub, string $status = 'paid', string $note = ''): void
 {
@@ -552,7 +582,7 @@ function payjp_sync(PDO $pdo, int $aid, bool $force = false): ?array
         /* 期間が進んでいれば更新（renew）として売上に記録 */
         $newEnd = ts_to_jst(isset($sub['current_period_end']) ? (int)$sub['current_period_end'] : null);
         if ($newEnd && $e['period_end'] && $newEnd > (string)$e['period_end'] && in_array((string)($sub['status'] ?? ''), ['active', 'trial'], true)) {
-            $pk = (string)$e['plan']; $amt = PAY_PLANS[$pk]['amount'] ?? 0;
+            $pk = (string)$e['plan']; $amt = (int)($sub['plan']['amount'] ?? 0) ?: ((int)($e['amount'] ?? 0) ?: (int)(PAY_PLANS[$pk]['amount'] ?? 0)); /* その人の定期課金の金額（据え置き中は料金表と違う） */
             payjp_record_payment($pdo, $aid, 'renew', $pk, $amt, '', (string)$e['ref'], 'paid', '期間更新 ' . substr($newEnd, 0, 10));
         }
         payjp_apply_subscription($pdo, $aid, $sub);
