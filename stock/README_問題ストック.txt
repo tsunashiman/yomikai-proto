@@ -16,4 +16,4 @@ stock/hold.txt           … 配信を止めたい日付を1行ずつ。ここ�
   3. python3 tools/stock_daily.py promote            ← 日付が来ていれば approved へ、index.json も更新
   4. GitHub にアップロード（または python3 tools/stock_daily.py push "新作 YYYY-MM-DD"）
 
-置き場所：https://github.com/tsunashiman/yomikai-proto　配信元：https://tsunashiman.github.io/yomikai-proto/stock/
+置き場所：https://github.com/tsunashiman/yomikai-proto　配信元：https://yomikai.tsunashiman.com/（GitHub の main から GitHub Actions で自動同期）stock/
