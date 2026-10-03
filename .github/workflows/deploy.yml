@@ -48,15 +48,25 @@ jobs:
           ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
         run: |
           if [ -z "$SAKURA_DB_PASSWORD" ]; then echo "Secret SAKURA_DB_PASSWORD が未設定のため、DB の設定ファイルは置きません（api/ は『準備中』と答えます）"; exit 0; fi
+          # 診断（値そのものは出さない）：文字数と、前後に空白・改行が混ざっていないか
+          python3 - <<'PY'
+          import os
+          p = os.environ["SAKURA_DB_PASSWORD"]; q = p.strip()
+          print("SAKURA_DB_PASSWORD: %d 文字%s" % (len(q), "（前後の空白・改行 %d 文字を取り除きました）" % (len(p) - len(q)) if len(p) != len(q) else ""))
+          kinds = sum(bool(any(f(c) for c in q)) for f in (str.islower, str.isupper, str.isdigit, lambda c: c in "-_"))
+          print("文字の種類：%d 種類（さくらの条件は 8〜32 文字・英大文字／英小文字／数字／記号(-_) のうち 2 種類以上）" % kinds)
+          if any(ord(c) > 126 or ord(c) < 33 for c in q): print("注意：全角文字か空白が含まれています")
+          PY
           python3 - <<'PY' > "$RUNNER_TEMP/db.json"
           import json, os
           print(json.dumps({
             "host": "mysql80.tsunashiman.sakura.ne.jp",
+            "hosts": ["mysql80.tsunashiman.sakura.ne.jp", "mysql3118.db.sakura.ne.jp"],
             "db": "tsunashiman_app",
             "users": ["tsunashiman_app", "tsunashiman"],
-            "pass": os.environ["SAKURA_DB_PASSWORD"],
+            "pass": os.environ["SAKURA_DB_PASSWORD"].strip(),
             "charset": "utf8mb4",
-            "admin_key": os.environ.get("ADMIN_KEY", "")
+            "admin_key": os.environ.get("ADMIN_KEY", "").strip()
           }, ensure_ascii=False))
           PY
           chmod 600 "$RUNNER_TEMP/db.json"
