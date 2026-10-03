@@ -50,7 +50,7 @@ button,.btn{padding:7px 14px;border:0;border-radius:8px;background:var(--acc);co
 }
 
 /* ---- ログイン ---- */
-if (isset($_GET['logout'])) { set_login_cookie(false); header('Location: ./'); exit; }
+if (isset($_GET['logout'])) { set_login_cookie(false); header('Location: index.php'); exit; }
 if (!logged_in()) {
     $msg = '';
     if (admin_key() === '') {
@@ -59,7 +59,7 @@ if (!logged_in()) {
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         try { rate_limit(db(), 'admin-login', 8, 300); } catch (Throwable $e) { /* DB 不調でも合言葉の照合はできる */ }
         $k = (string)($_POST['key'] ?? '');
-        if ($k !== '' && hash_equals(admin_key(), $k)) { set_login_cookie(true); header('Location: ./'); exit; }
+        if ($k !== '' && hash_equals(admin_key(), $k)) { set_login_cookie(true); header('Location: index.php'); exit; }
         usleep(400000);
         $msg = '<p class="ng">合言葉が違います。</p>';
     }
@@ -88,6 +88,35 @@ function pct(int $ok, int $n): string { return $n > 0 ? round($ok / $n * 100) . 
 function dt(?string $s): string { return $s ? substr($s, 0, 16) : '—'; }
 $tester = strtoupper(s($_GET['tester'] ?? '', 16));
 $w = $tester !== '' ? ' AND `tester_id` = ' . $pdo->quote($tester) : '';
+/* ---- 削除（自分の試し打ちや、おかしな記録を消す）。フォームの印（ログインのクッキーと同じ値）が合うときだけ ---- */
+$csrf = (string)($_COOKIE[COOKIE] ?? '');
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['del'])) {
+    if (!hash_equals($csrf, (string)($_POST['t'] ?? ''))) page('エラー', '<div class="card"><h1>やり直してください</h1><p>画面を開き直してから、もう一度削除してください。</p></div>');
+    $del = (string)$_POST['del']; $n = 0;
+    if ($del === 'tester') {
+        $tid = strtoupper(s($_POST['id'] ?? '', 16));
+        if ($tid !== '') {
+            foreach (['usage_items', 'usage_events', 'usage_batches', 'feedback', 'daily_results'] as $t) { $st = $pdo->prepare('DELETE FROM `' . $t . '` WHERE `app_id` = ? AND `tester_id` = ?'); $st->execute([APP_ID, $tid]); $n += $st->rowCount(); }
+        }
+        header('Location: index.php?v=summary&deleted=' . $n); exit;
+    }
+    if ($del === 'rank') {
+        $id = (int)($_POST['id'] ?? 0);
+        if ($id > 0) { $st = $pdo->prepare('DELETE FROM `daily_results` WHERE `app_id` = ? AND `id` = ?'); $st->execute([APP_ID, $id]); $n = $st->rowCount(); }
+        header('Location: index.php?v=ranking&date=' . h(s($_POST['date'] ?? '', 10)) . '&deleted=' . $n); exit;
+    }
+    if ($del === 'feedback') {
+        $id = (int)($_POST['id'] ?? 0);
+        if ($id > 0) { $st = $pdo->prepare('DELETE FROM `feedback` WHERE `app_id` = ? AND `id` = ?'); $st->execute([APP_ID, $id]); $n = $st->rowCount(); }
+        header('Location: index.php?v=feedback&deleted=' . $n); exit;
+    }
+}
+function del_form(string $kind, string $id, string $label, string $confirm, string $extra = ''): string
+{
+    global $csrf;
+    return '<form method="post" style="display:inline" onsubmit="return confirm(' . h(json_encode($confirm, JSON_UNESCAPED_UNICODE)) . ')"><input type="hidden" name="del" value="' . h($kind) . '"><input type="hidden" name="id" value="' . h($id) . '"><input type="hidden" name="t" value="' . h($csrf) . '">' . $extra . '<button type="submit" class="btn ghost" style="padding:2px 8px;font-size:12px;color:var(--ng)">' . h($label) . '</button></form>';
+}
+$deletedNote = isset($_GET['deleted']) ? '<p class="small ok">削除しました（' . (int)$_GET['deleted'] . ' 件）。</p>' : '';
 
 if ($v === 'summary') {
     $rows = $q('SELECT `tester_id`, MIN(`at`) first_at, MAX(`at`) last_at, COUNT(DISTINCT DATE(`at`)) days,
@@ -105,23 +134,23 @@ if ($v === 'summary') {
     $devices = [];
     foreach ($q('SELECT `tester_id`, COUNT(DISTINCT `did`) c FROM `usage_events` WHERE `app_id` = ? GROUP BY `tester_id`', [APP_ID]) as $r) $devices[$r['tester_id']] = (int)$r['c'];
     $fbNoLog = $q('SELECT `tester_id`, COUNT(*) c, AVG(`rating`) avg_r, MAX(`received_at`) last_at FROM `feedback` WHERE `app_id` = ? AND `tester_id` NOT IN (SELECT DISTINCT `tester_id` FROM `usage_events` WHERE `app_id` = ?) GROUP BY `tester_id`', [APP_ID, APP_ID]);
-    $head = ['テスターID', '初回', '最終', '利用日数', '起動', 'セット数', 'うちランキング', 'プレイ時間', '滞在時間', '回答数', '正答率', 'モード別', 'ご意見', '端末', '版', 'エラー'];
+    $head = ['テスターID', '初回', '最終', '利用日数', '起動', 'セット数', 'うちランキング', 'プレイ時間', '滞在時間', '回答数', '正答率', 'モード別', 'ご意見', '端末', '版', 'エラー', '削除'];
     $table = [];
     foreach ($rows as $r) {
         $t = $r['tester_id']; $l = $last[$t] ?? [];
         $table[] = [$t !== '' ? $t : '（IDなし）', dt($r['first_at']), dt($r['last_at']), (int)$r['days'], (int)$r['opens'], (int)$r['sets'], (int)$r['dailies'], fmt_min((int)$r['play_ms']), fmt_min((int)$r['sess_ms']), (int)$r['done_q'], pct((int)$r['ok_q'], (int)$r['done_q']),
             implode('／', $modes[$t] ?? []), isset($fbc[$t]) ? $fbc[$t]['c'] . ' 件（平均★' . round((float)$fbc[$t]['avg_r'], 1) . '）' : '0',
-            ($l['platform'] ?? '') . (!empty($l['standalone']) ? '・インストール済' : '') . (($devices[$t] ?? 1) > 1 ? '・' . $devices[$t] . ' 台' : ''), ($l['build'] ?? '') . ' ' . ($l['edition'] ?? ''), (int)$r['errs']];
+            ($l['platform'] ?? '') . (!empty($l['standalone']) ? '・インストール済' : '') . (($devices[$t] ?? 1) > 1 ? '・' . $devices[$t] . ' 台' : ''), ($l['build'] ?? '') . ' ' . ($l['edition'] ?? ''), (int)$r['errs'], ''];
     }
-    if ($csv) csv_out('テスター別まとめ', $head, $table);
+    if ($csv) csv_out('テスター別まとめ', $head, array_map(fn($r) => array_slice($r, 0, 16), $table));
     $tot = $q('SELECT COUNT(DISTINCT `tester_id`) testers, COUNT(DISTINCT `did`) devices, SUM(`type` = \'set\') sets, SUM(CASE WHEN `type` = \'set\' THEN `ms` ELSE 0 END) play_ms FROM `usage_events` WHERE `app_id` = ?', [APP_ID])[0];
     $fbt = $q('SELECT COUNT(*) c, AVG(`rating`) avg_r FROM `feedback` WHERE `app_id` = ?', [APP_ID])[0];
     $rk = $q('SELECT COUNT(*) c, COUNT(DISTINCT `day`) days FROM `daily_results` WHERE `app_id` = ?', [APP_ID])[0];
-    $b = '<h1>テスター別まとめ</h1><div class="card kpi"><div><span class="mut small">テスター（ログあり）</span><b>' . (int)$tot['testers'] . '</b></div><div><span class="mut small">端末</span><b>' . (int)$tot['devices'] . '</b></div><div><span class="mut small">セット数</span><b>' . (int)$tot['sets'] . '</b></div><div><span class="mut small">プレイ時間</span><b>' . fmt_min((int)$tot['play_ms']) . '</b></div><div><span class="mut small">ご意見</span><b>' . (int)$fbt['c'] . '</b><span class="small mut">平均★' . ($fbt['c'] ? round((float)$fbt['avg_r'], 1) : '—') . '</span></div><div><span class="mut small">ランキング参加</span><b>' . (int)$rk['c'] . '</b><span class="small mut">' . (int)$rk['days'] . ' 日分</span></div></div>';
+    $b = '<h1>テスター別まとめ</h1>' . $deletedNote . '<div class="card kpi"><div><span class="mut small">テスター（ログあり）</span><b>' . (int)$tot['testers'] . '</b></div><div><span class="mut small">端末</span><b>' . (int)$tot['devices'] . '</b></div><div><span class="mut small">セット数</span><b>' . (int)$tot['sets'] . '</b></div><div><span class="mut small">プレイ時間</span><b>' . fmt_min((int)$tot['play_ms']) . '</b></div><div><span class="mut small">ご意見</span><b>' . (int)$fbt['c'] . '</b><span class="small mut">平均★' . ($fbt['c'] ? round((float)$fbt['avg_r'], 1) : '—') . '</span></div><div><span class="mut small">ランキング参加</span><b>' . (int)$rk['c'] . '</b><span class="small mut">' . (int)$rk['days'] . ' 日分</span></div></div>';
     $b .= '<div class="card"><div class="row"><span class="mut small">利用ログはテスターコードが有効な端末からだけ届きます。プレイ時間＝セットの開始から終了まで、滞在時間＝アプリの画面を開いていた時間。</span><a class="btn ghost" style="margin-left:auto" href="?v=summary&csv=1">CSV</a></div><table><tr>' . implode('', array_map(fn($x) => '<th>' . h($x) . '</th>', $head)) . '</tr>';
-    foreach ($table as $i => $r) { $t = $rows[$i]['tester_id']; $b .= '<tr>' . implode('', array_map(fn($x, $j) => '<td' . (in_array($j, [3, 4, 5, 6, 9, 15], true) ? ' class="num"' : '') . '>' . ($j === 0 ? '<a href="?v=log&tester=' . h($t) . '">' . h($x) . '</a>' : h($x)) . '</td>', $r, array_keys($r))) . '</tr>'; }
-    if (!$table) $b .= '<tr><td colspan="16" class="mut">まだ利用ログが届いていません。</td></tr>';
-    $b .= '</table></div>';
+    foreach ($table as $i => $r) { $t = $rows[$i]['tester_id']; $b .= '<tr>' . implode('', array_map(fn($x, $j) => '<td' . (in_array($j, [3, 4, 5, 6, 9, 15], true) ? ' class="num"' : '') . '>' . ($j === 0 ? '<a href="?v=log&tester=' . h($t) . '">' . h($x) . '</a>' : ($j === 16 ? ($t !== '' ? del_form('tester', $t, '削除', 'テスターID ' . $t . ' の利用ログ・ご意見・ランキングの記録をすべて削除します。元に戻せません。よろしいですか？') : '') : h($x))) . '</td>', $r, array_keys($r))) . '</tr>'; }
+    if (!$table) $b .= '<tr><td colspan="17" class="mut">まだ利用ログが届いていません。</td></tr>';
+    $b .= '</table><p class="small mut">「削除」は、自分の試し打ちなど、そのテスターIDの記録をまとめて消すためのもの（ご意見・ランキングの記録も消える）。</p></div>';
     if ($fbNoLog) { $b .= '<h2>ご意見だけ届いている（利用ログなし）</h2><div class="card"><table><tr><th>テスターID</th><th class="num">件数</th><th>平均★</th><th>最終</th></tr>'; foreach ($fbNoLog as $r) $b .= '<tr><td>' . h($r['tester_id'] !== '' ? $r['tester_id'] : '（IDなし＝通常版）') . '</td><td class="num">' . (int)$r['c'] . '</td><td>' . round((float)$r['avg_r'], 1) . '</td><td>' . dt($r['last_at']) . '</td></tr>'; $b .= '</table></div>'; }
     page('テスター別まとめ', $b);
 }
@@ -156,17 +185,18 @@ if ($v === 'feedback') {
     $rows = $q('SELECT * FROM `feedback` WHERE `app_id` = ?' . $w . ' ORDER BY `received_at` DESC LIMIT 300', [APP_ID]);
     $priceName = ['high' => '高い', 'bit' => 'やや高い', 'ok' => 'ちょうどよい', 'cheap' => '安い', 'unknown' => 'わからない'];
     $head = ['受信', 'テスター', '版', '総合★', '面白さ', '難しさ', '質', '操作', 'すすめ度', '料金', '良かった点', '改善点・不具合', 'お名前', '連絡先', '引用', 'きっかけ', '端末', '利用者番号'];
-    $table = [];
+    $table = []; $fids = [];
     foreach ($rows as $r) {
+        $fids[] = (int)$r['id'];
         $cx = json_decode((string)$r['context_json'], true) ?: [];
         $extra = '';
         if (!empty($cx['extra']['problem'])) $extra = "\n（問題：" . $cx['extra']['problem'] . '）';
         $table[] = [substr((string)$r['received_at'], 0, 16), $r['tester_id'], $r['edition'], (int)$r['rating'], $r['fun'] ?: '', $r['difficulty'] ?: '', $r['quality'] ?: '', $r['usability'] ?: '', $r['nps'] !== null ? (int)$r['nps'] : '', $priceName[$r['price']] ?? $r['price'], $r['good'], $r['improve'] . $extra, $r['name'], $r['contact'], $r['quote_ok'] ? '可' : '', $r['trig'], $r['platform'], (int)$r['uid']];
     }
     if ($csv) csv_out('ご意見', $head, $table);
-    $b = '<h1>ご意見・評価</h1><div class="card"><div class="row"><span class="small mut">新しい順に 300 件。項目別は 1〜5（空欄＝未回答）、すすめ度は 0〜10。</span><a class="btn ghost" style="margin-left:auto" href="?v=feedback&csv=1">CSV</a></div><table><tr>' . implode('', array_map(fn($x) => '<th>' . h($x) . '</th>', $head)) . '</tr>';
-    foreach ($table as $r) $b .= '<tr>' . implode('', array_map(fn($x, $j) => '<td class="' . (in_array($j, [10, 11], true) ? 'wrap' : (in_array($j, [3, 4, 5, 6, 7, 8, 17], true) ? 'num' : '')) . '">' . h($x) . '</td>', $r, array_keys($r))) . '</tr>';
-    if (!$table) $b .= '<tr><td colspan="18" class="mut">まだご意見は届いていません。</td></tr>';
+    $b = '<h1>ご意見・評価</h1>' . $deletedNote . '<div class="card"><div class="row"><span class="small mut">新しい順に 300 件。項目別は 1〜5（空欄＝未回答）、すすめ度は 0〜10。</span><a class="btn ghost" style="margin-left:auto" href="?v=feedback&csv=1">CSV</a></div><table><tr>' . implode('', array_map(fn($x) => '<th>' . h($x) . '</th>', $head)) . '<th>削除</th></tr>';
+    foreach ($table as $i => $r) $b .= '<tr>' . implode('', array_map(fn($x, $j) => '<td class="' . (in_array($j, [10, 11], true) ? 'wrap' : (in_array($j, [3, 4, 5, 6, 7, 8, 17], true) ? 'num' : '')) . '">' . h($x) . '</td>', $r, array_keys($r))) . '<td>' . del_form('feedback', (string)$fids[$i], '削除', $r[0] . ' のご意見（★' . $r[3] . '）を削除します。よろしいですか？') . '</td></tr>';
+    if (!$table) $b .= '<tr><td colspan="19" class="mut">まだご意見は届いていません。</td></tr>';
     page('ご意見・評価', $b . '</table></div>');
 }
 
@@ -175,16 +205,17 @@ if ($v === 'ranking') {
     $day = s($_GET['date'] ?? ($days[0]['day'] ?? today()), 10);
     $rows = $q('SELECT * FROM `daily_results` WHERE `app_id` = ? AND `day` = ? ORDER BY `score` DESC, `secs` ASC, `id` ASC', [APP_ID, $day]);
     $head = ['順位', '名前', 'スコア', '正解', '字/分', '合計秒', 'テスター', '端末', 'サブスク相当', '版', '受信'];
-    $table = []; $pos = 0;
-    foreach ($rows as $r) { $pos++; $table[] = [$pos, $r['handle'], (int)$r['score'], $r['correct'] . '/' . $r['total'], (int)$r['rate'], (float)$r['secs'], $r['tester_id'], $r['did'], $r['pro'] ? '○' : '', $r['build'] . ' ' . $r['edition'], substr((string)$r['received_at'], 0, 16)]; }
+    $table = []; $pos = 0; $ids = [];
+    foreach ($rows as $r) { $pos++; $ids[] = (int)$r['id']; $table[] = [$pos, $r['handle'], (int)$r['score'], $r['correct'] . '/' . $r['total'], (int)$r['rate'], (float)$r['secs'], $r['tester_id'], $r['did'], $r['pro'] ? '○' : '', $r['build'] . ' ' . $r['edition'], substr((string)$r['received_at'], 0, 16)]; }
     if ($csv) csv_out('ランキング_' . $day, $head, $table);
-    $b = '<h1>ランキング</h1><div class="card"><form class="row" method="get"><input type="hidden" name="v" value="ranking"><label>日付 <select name="date">';
+    $b = '<h1>ランキング</h1>' . $deletedNote . '<div class="card"><form class="row" method="get"><input type="hidden" name="v" value="ranking"><label>日付 <select name="date">';
     foreach ($days as $d) $b .= '<option value="' . h($d['day']) . '"' . ($d['day'] === $day ? ' selected' : '') . '>' . h($d['day']) . '（' . (int)$d['c'] . ' 人・最高 ' . number_format((int)$d['top']) . '）</option>';
     if (!$days) $b .= '<option value="' . h($day) . '">' . h($day) . '</option>';
     $b .= '</select></label><button type="submit">表示</button><a class="btn ghost" style="margin-left:auto" href="?v=ranking&date=' . h($day) . '&csv=1">CSV</a></form><p class="small mut">その日の「今日の20問」の初回の結果（端末ごとに 1 件）。順位はスコア → 合計秒 → 先着。アプリの順位表では、参加者が 10 人未満のあいだはサンプルプレイヤーも並べて表示します。</p><table><tr>' . implode('', array_map(fn($x) => '<th>' . h($x) . '</th>', $head)) . '</tr>';
-    foreach ($table as $r) $b .= '<tr>' . implode('', array_map(fn($x, $j) => '<td class="' . (in_array($j, [0, 2, 4, 5], true) ? 'num' : '') . '">' . h($x) . '</td>', $r, array_keys($r))) . '</tr>';
-    if (!$table) $b .= '<tr><td colspan="11" class="mut">この日の記録はありません。</td></tr>';
-    page('ランキング', $b . '</table></div>');
+    $b = str_replace('<th>受信</th></tr>', '<th>受信</th><th>削除</th></tr>', $b);
+    foreach ($table as $i => $r) $b .= '<tr>' . implode('', array_map(fn($x, $j) => '<td class="' . (in_array($j, [0, 2, 4, 5], true) ? 'num' : '') . '">' . h($x) . '</td>', $r, array_keys($r))) . '<td>' . del_form('rank', (string)$ids[$i], '削除', $day . ' の「' . $r[1] . '」（スコア ' . $r[2] . '）の記録を削除します。よろしいですか？', '<input type="hidden" name="date" value="' . h($day) . '">') . '</td></tr>';
+    if (!$table) $b .= '<tr><td colspan="12" class="mut">この日の記録はありません。</td></tr>';
+    page('ランキング', $b . '</table><p class="small mut">「削除」は、自分の試し打ちや不正と思われる記録を順位表から外すためのもの（その端末のアプリ側の表示は次に順位表を開いたときに変わる）。</p></div>');
 }
 
 if ($v === 'items') {
