@@ -1,4 +1,4 @@
-PWA公開用 一式（論理的読解タイムアタック 試作版）
+PWA公開用 一式（まじめに速読トレ 試作版）
 ==================================================
 
 このフォルダの中身をそのまま Web サーバー（https）に置くと、
@@ -16,7 +16,7 @@ Android の Chrome では「アプリをインストール」、PC の Chrome／
 
 ■ サーバー側（v58・さくらでだけ動く PHP）
  ・api/collect.php  ：ご意見・評価と利用ログ（テスター版）の受信。アプリの feedbackEndpoint がここを指す（Google スプレッドシートは不要になった）
- ・api/ranking.php  ：ランキング。その日の「今日の20問」の初回の結果を集め、同じ20問を解いた人同士の順位表を返す
+ ・api/ranking.php  ：ランキング。その日の「今日のランキング戦」の初回の結果を集め、同じ20問を解いた人同士の順位表を返す
  ・api/health.php   ：動作確認（https://yomikai.tsunashiman.com/api/health.php で DB につながっているか分かる）
  ・admin/           ：開発者用の管理ページ https://yomikai.tsunashiman.com/admin/（テスター別まとめ・利用ログ・ご意見・ランキング・文別の成績・CSV）
                      合言葉は GitHub の Secret ADMIN_KEY。アプリからはどこにもリンクしていない
