@@ -30,7 +30,7 @@ function page(string $title, string $body, bool $nav = true): never
     $cur = (string)($_GET['v'] ?? 'summary');
     $links = '';
     if ($nav) foreach ($views as $k => $name) $links .= '<a href="?v=' . $k . '"' . ($cur === $k ? ' class="on"' : '') . '>' . $name . '</a>';
-    echo '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>' . h($title) . ' | 論理読解TA 管理</title>
+    echo '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>' . h($title) . ' | 速読トレ 管理</title>
 <style>
 :root{--ink:#1d2433;--mut:#6b7280;--line:#e5e7eb;--bg:#f6f7fb;--card:#fff;--acc:#2d6cdf;--ok:#1a9a5b;--ng:#d04c4c}
 *{box-sizing:border-box}body{margin:0;font:14px/1.6 -apple-system,"Segoe UI","Hiragino Sans","Noto Sans JP",sans-serif;color:var(--ink);background:var(--bg)}
@@ -45,7 +45,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}td.wrap{white-s
 button,.btn{padding:7px 14px;border:0;border-radius:8px;background:var(--acc);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}.btn.ghost{background:#eef1f7;color:var(--ink)}
 .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}.kpi div{background:#fafbfe;border:1px solid var(--line);border-radius:10px;padding:8px 10px}.kpi b{font-size:20px;display:block}
 .login{max-width:420px;margin:60px auto}
-</style></head><body><header><b>論理的読解タイムアタック　管理</b>' . ($nav ? '<nav>' . $links . '</nav><span style="margin-left:auto" class="small"><a href="../api/health.php" target="_blank" rel="noopener">状態</a>　<a href="?logout=1">ログアウト</a></span>' : '') . '</header><main>' . $body . '</main></body></html>';
+</style></head><body><header><b>まじめに速読トレ　管理</b>' . ($nav ? '<nav>' . $links . '</nav><span style="margin-left:auto" class="small"><a href="../api/health.php" target="_blank" rel="noopener">状態</a>　<a href="?logout=1">ログアウト</a></span>' : '') . '</header><main>' . $body . '</main></body></html>';
     exit;
 }
 
