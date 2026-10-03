@@ -1,6 +1,7 @@
 # さくらのレンタルサーバ（yomikai.tsunashiman.com）への自動反映
 # main に push されるたび（毎日の新作生成ルーティンの更新も含む）、このリポジトリの中身を
 # サーバーの /home/tsunashiman/www/yomikai/ に rsync で同期する。手動実行（Actions タブ → Run workflow）も可。
+# site/root/ は案内サイト（https://tsunashiman.com/ ＝ www/）、site/jp/ は tsunashiman.jp → .com の転送（www/jp/）へ別に同期する。
 # 必要な Secret：
 #   SAKURA_SSH_KEY     さくらに登録した公開鍵に対応する秘密鍵（OpenSSH 形式の全文）
 #   SAKURA_DB_PASSWORD データベース tsunashiman_app のパスワード → サーバーの公開領域の外 /home/tsunashiman/secrets/db.json に書き出す
@@ -37,10 +38,26 @@ jobs:
       - name: www/yomikai へ同期（rsync）
         run: |
           rsync -rlptvz --delete --omit-dir-times --no-perms --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
-            --exclude '.git' --exclude '.github' --exclude 'README.md' \
+            --exclude '.git' --exclude '.github' --exclude 'README.md' --exclude 'site' \
             --rsync-path=/usr/local/bin/rsync \
             -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes" \
             ./ tsunashiman@tsunashiman.sakura.ne.jp:/home/tsunashiman/www/yomikai/
+
+      - name: 案内サイト（tsunashiman.com → www/）と .jp の転送（www/jp/）を同期
+        run: |
+          SSH="ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes"
+          echo "== 同期前の www/ の中身（確認用）"; $SSH tsunashiman@tsunashiman.sakura.ne.jp 'ls -la ~/www | head -40; echo; [ -f ~/www/.htaccess ] && { echo "-- www/.htaccess:"; cat ~/www/.htaccess; } || echo "(www/.htaccess なし)"' || true
+          if [ -d site/root ]; then
+            # www/ 直下は --delete を付けない（さくらが置く php.ini などを消さないため）。ファイルの追加・更新だけ
+            rsync -rlptvz --omit-dir-times --no-perms --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
+              --rsync-path=/usr/local/bin/rsync -e "$SSH" \
+              site/root/ tsunashiman@tsunashiman.sakura.ne.jp:/home/tsunashiman/www/
+          fi
+          if [ -d site/jp ]; then
+            rsync -rlptvz --delete --omit-dir-times --no-perms --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
+              --rsync-path=/usr/local/bin/rsync -e "$SSH" \
+              site/jp/ tsunashiman@tsunashiman.sakura.ne.jp:/home/tsunashiman/www/jp/
+          fi
 
       - name: データベースの接続設定を公開領域の外に置く（secrets/db.json）
         env:
@@ -85,3 +102,5 @@ jobs:
           echo "API の状態："
           curl -s --max-time 20 https://yomikai.tsunashiman.com/api/health.php || echo "（api/health.php に届きません）"
           echo
+          echo "案内サイト：https://tsunashiman.com/ -> HTTP $(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://tsunashiman.com/ || true)"
+          echo ".jp の転送：https://tsunashiman.jp/ -> $(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 20 https://tsunashiman.jp/ || echo '（まだ届きません）')"
