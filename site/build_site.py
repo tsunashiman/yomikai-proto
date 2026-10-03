@@ -54,6 +54,9 @@ footer{border-top:1px solid var(--line);margin-top:30px}
 footer .in{max-width:var(--maxw);margin:0 auto;padding:22px 20px;display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px;color:var(--mut)}
 footer a{color:var(--mut)}footer .copy{margin-left:auto}
 .price{display:flex;gap:14px;flex-wrap:wrap}.price .card{flex:1 1 220px}.price b.big{font-size:26px}
+.tblwrap{overflow-x:auto;margin:14px 0}table.cmp{border-collapse:collapse;width:100%;min-width:560px;font-size:14px;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+table.cmp th,table.cmp td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}table.cmp thead th{background:color-mix(in srgb,var(--bg) 60%,var(--card));font-weight:700}table.cmp tbody th{width:27%;font-weight:600}
+table.cmp .pro{background:color-mix(in srgb,var(--blue) 8%,var(--card))}table.cmp tr:last-child td,table.cmp tr:last-child th{border-bottom:0}
 """
 
 def page(title, body, rel='', desc='', path_label=None):
@@ -84,7 +87,7 @@ INDEX = page('Tsunashiman（ツナシマン）｜考える力を鍛えるアプ�
   <div>
     <span class="eyebrow">毎日開催｜速読｜全国ランキング戦</span>
     <h3 style="margin:0 0 6px;font-size:20px">%(app)s <span class="tag">試作版</span></h3>
-    <p><b>基礎の反復｜毎日開催・全国速読ランキング戦｜1日5分。</b>速く読んで、正しく読めたかを毎回チェック。「読んだつもり」を許さない、理解チェック付きの速読トレーニングです。超集中の 1 日 5 分。短い反復を毎日積み重ねるのがカギ。毎日開催の全国ランキング戦では、全員が同じ 20 問に挑戦。読み取り速度（字/分）の記録と順位で、伸びが目に見える。</p>
+    <p><b>基礎の反復｜毎日開催・全国速読ランキング戦｜1日5分。</b>速く読んで、正しく読めたかを毎回チェック。「読んだつもり」を許さない、理解チェック付きの速読トレーニングです。超集中の 1 日 5 分。短い反復を毎日積み重ねるのがカギ。毎日開催の全国ランキング戦では、全員が同じ 20 問に挑戦。読み取り速度（字/分）の記録と順位で、伸びが目に見える。お子様にも安心して使える文章だけを収録しています。</p>
     <p class="small mut" style="margin-top:8px">Web アプリ（PC・スマホのブラウザで動作。ホーム画面に追加してアプリとしても使えます）。基本無料。正式版では新作の追加やランキング機能を広げるサブスクを予定。</p>
     <p style="margin-top:12px"><a class="btn" href="%(appurl)s">アプリを開く</a> <a class="btn ghost" href="apps/yomikai/">機能と料金</a></p>
   </div>
@@ -118,11 +121,12 @@ APP_PAGE = page('まじめに速読トレ（試作版）｜毎日開催・全国
 
 <h2>できること</h2>
 <div class="grid">
-  <div class="card"><h3>今日のランキング戦（全員同じ 20 問）</h3><p>毎日同じ 20 問を全員が解き、文が表示されてから「判定する」までの時間と正誤で順位が決まります。初回の受験だけが記録され、順位は翌日に確定。順位でレベルが上下します。</p></div>
+  <div class="card"><h3>今日のランキング戦（全員同じ 20 問）</h3><p>毎日同じ 20 問を全員が解き、文が表示されてから「判定する」までの時間と正誤で順位が決まります。ランキングに記録されるのは当日の初回の受験だけで（当日 2 回目以降は練習扱いでランキング対象外）、順位は翌日に確定。順位でレベルが上下します。</p></div>
   <div class="card"><h3>練習モード</h3><p>分野（日常会話・小説・ニュース・エッセイ・教養・学習）と文の長さを選んで 10 文。毎日新作が追加され、自分の読み取り速度（字/分）が記録されます。</p></div>
   <div class="card"><h3>復習モード</h3><p>間違えた文・時間のかかった文から順に出題。同じ文でも問いが変わるので、答えを覚えるのではなく読み取る力がつきます。</p></div>
-  <div class="card"><h3>学習の分野・自作問題</h3><p>ふりがな・ひらがな表示に対応した学習向けの分野と、自分で文と問いを作れる自作問題（Excel からの取り込みも可）。</p></div>
+  <div class="card"><h3>学習の分野・自作問題</h3><p>小学生のお子様の学習にも役立つ「ふりがな・ひらがな表示」に対応した学習向けの分野（歴史・理科・公民）と、自分で文と問いを作れる自作問題（Excel からの取り込みも可）。</p></div>
   <div class="card"><h3>記録と弱点分析</h3><p>分野別・長さ別の正答率、読み取り速度の推移、過去のランキング戦への再挑戦。</p></div>
+  <div class="card"><h3>お子様にも安心</h3><p>文章は、性的・暴力的・差別的な表現や、犯罪・自傷などを助長する内容を含まないことを基準に作成・点検しています。ニュース・評論の分野でも、事件や事故を生々しく描く文は入れません。小さなお子様や未成年の方にも安心してお使いいただけます。万一気になる文があれば、アプリの判定画面の「通報・指摘」からお知らせください（確認のうえ取り下げます）。</p></div>
   <div class="card"><h3>プライバシー</h3><p>氏名・連絡先なしで使えます。記録は端末内に保存し、サーバーに送るのは順位の計算に必要な最小限の情報だけ。<a href="../../legal/privacy.html">くわしく</a></p></div>
 </div>
 
@@ -130,10 +134,25 @@ APP_PAGE = page('まじめに速読トレ（試作版）｜毎日開催・全国
 <div class="notice">試作版のあいだは、すべての機能を無料で試せます（アプリ内の「サブスク登録」は模擬で、請求は発生しません）。正式版の料金は以下を予定しており、変更する場合はこのページとアプリ内でお知らせします。</div>
 <div class="price" style="margin-top:14px">
   <div class="card"><span class="eyebrow">無料</span><br><b class="big">0 円</b><p>ランキング戦（毎日 20 問の新作）・練習の新作 10 文/日・復習は無制限・ランキング参加（読者#番号で掲載）・直近 7 日の記録</p></div>
-  <div class="card"><span class="eyebrow">サブスク 月額</span><br><b class="big">780 円</b><span class="mut">/月（税込）</span><p>練習の新作 30 文/日・分野の自由選択・時事と教養の毎日枠・過去のランキング戦・全期間の記録と弱点分析・ペンネーム掲載・週間/月間ランキング</p></div>
-  <div class="card"><span class="eyebrow">サブスク 年額</span><br><b class="big">7,800 円</b><span class="mut">/年（税込・2 か月分お得）</span><p>月額と同じ内容。1 日あたり約 21 円。</p></div>
+  <div class="card"><span class="eyebrow">サブスク 月額</span><br><b class="big">500 円</b><span class="mut">/月（税込）</span><p>練習の新作 30 文/日・分野の自由選択・時事と教養の毎日枠・過去のランキング戦・全期間の記録と弱点分析・ペンネーム掲載・週間/月間ランキング。1 日あたり約 17 円。</p><p style="margin-top:8px"><a href="#compare">無料との違いを一覧表で見る ›</a></p></div>
+  <div class="card"><span class="eyebrow">サブスク 年額</span><br><b class="big">5,000 円</b><span class="mut">/年（税込・2 か月分お得）</span><p>月額と同じ内容。月額換算 417 円、1 日あたり約 14 円。</p><p style="margin-top:8px"><a href="#compare">無料との違いを一覧表で見る ›</a></p></div>
 </div>
-<p class="small mut">サブスクの最小単位は 1 か月（または 1 年）です。解約はいつでもでき、次の更新日から請求が止まります（期間の途中で解約しても日割りの返金はありません）。チケット（新作 10 文を 1 枚で追加。5 枚 600 円）も検討中です。</p>
+<p class="small mut">サブスクの最小単位は 1 か月（または 1 年）です。解約はいつでもでき、次の更新日から請求が止まります（期間の途中で解約しても日割りの返金はありません）。チケット（5 枚 500 円＝1 枚 100 円で新作 10 文を追加。10 枚なら 900 円）も検討中です。</p>
+
+<h2 id="compare">無料とサブスクの違い（一覧表）</h2>
+<div class="tblwrap"><table class="cmp"><thead><tr><th></th><th>無料</th><th class="pro">サブスク</th></tr></thead><tbody>
+<tr><th>今日のランキング戦</th><td>毎日 20 問</td><td class="pro">同じ</td></tr>
+<tr><th>練習モードで解ける<b>初めて見る文</b></th><td><b>1 日 10 文</b>（分野・節数の合計）＋チケット 1 枚で +10 文</td><td class="pro"><b>1 日 30 文</b>（合計）</td></tr>
+<tr><th>練習で選べる分野</th><td>ミックス・今日の分野・学習・自作</td><td class="pro"><b>すべての分野</b></td></tr>
+<tr><th>練習で選べる節数</th><td>すべて</td><td class="pro">同じ</td></tr>
+<tr><th>復習モード</th><td>無制限</td><td class="pro">無制限＋<b>ランキング戦の文も</b></td></tr>
+<tr><th>自作問題・自作問題モード</th><td>あり（画面から 1 文ずつ）</td><td class="pro">同じ＋<b>Excel でまとめて取り込み・書き出し</b></td></tr>
+<tr><th>過去のランキング戦</th><td>なし</td><td class="pro"><b>前日までの全て</b>（2026 年 9 月 29 日の公開以降）</td></tr>
+<tr><th>記録</th><td>直近 7 日</td><td class="pro"><b>全期間</b>＋弱点分析</td></tr>
+<tr><th>ランキングの掲載</th><td>読者#番号</td><td class="pro"><b>ペンネーム＋★</b>・週間／月間</td></tr>
+<tr><th>料金（予定）</th><td>0 円</td><td class="pro">月 500 円／年 5,000 円（税込・2 か月分無料）<br><span class="small">1 日あたり 月契約 約 17 円／年契約 約 14 円。7 日間無料トライアル</span></td></tr>
+</tbody></table></div>
+<p class="small mut">新作の文そのものは、無料・サブスクとも毎日すべての分野・節数が端末に届きます。違いは「初めて見る文を 1 日に何文まで練習できるか」と「分野を自由に選べるか」です。1 日の枠は分野・節数の合計で、どの分野・どの節数に使ってもかまいません。「今日のランキング戦」の文は枠に数えません。枠を使い切った日も、見たことのある文の練習と復習モードは無制限です。</p>
 
 <h2>動作環境</h2>
 <p class="small">Chrome・Edge・Safari の最新版（PC・Android・iPhone/iPad）。初回はインターネット接続が必要です。2 回目からは、問題を受け取る以外はオフラインでも動きます。</p>
@@ -154,7 +173,7 @@ TOKUSHOHO = page('特定商取引法に基づく表記｜Tsunashiman', '''
 <tr><th>電話番号</th><td><span class="todo">電話番号</span><br><span class="small mut">※所在地と同様に、「請求があれば遅滞なく開示いたします」とする方法も選べます。</span></td></tr>
 <tr><th>メールアドレス</th><td>%(mail)s</td></tr>
 <tr><th>販売 URL</th><td>%(appurl)s（アプリ内）</td></tr>
-<tr><th>販売価格</th><td>サブスクリプション 月額 780 円（税込）／年額 7,800 円（税込）<span class="todo">（予定・確定後に更新）</span>。各サービスの価格は、お申し込み画面に表示します。</td></tr>
+<tr><th>販売価格</th><td>サブスクリプション 月額 500 円（税込）／年額 5,000 円（税込）、チケット 5 枚 500 円／10 枚 900 円（税込）<span class="todo">（予定・確定後に更新）</span>。各サービスの価格は、お申し込み画面に表示します。</td></tr>
 <tr><th>商品代金以外の必要料金</th><td>インターネット接続にかかる通信料（お客様のご負担）</td></tr>
 <tr><th>お支払い方法</th><td>クレジットカード（決済代行：<span class="todo">PAY.JP</span>）</td></tr>
 <tr><th>お支払い時期</th><td>お申し込み時に初回分を決済し、以後は更新日に自動で決済します。</td></tr>
@@ -188,7 +207,17 @@ PRIVACY = page('プライバシーポリシー｜Tsunashiman', '''
 <li><b>決済情報</b>：クレジットカード番号などの決済情報は決済代行会社（PAY.JP を予定）が取り扱い、当方のサーバーには保存されません。当方が受け取るのは、決済の成否・プラン・期間などの情報です。</li>
 </ul>
 <h3>（3）端末内に保存される情報</h3>
-<p>学習の記録、設定、自作問題などはブラウザの保存領域（localStorage・IndexedDB）に保存されます。これらは利用者の端末内にあり、当方のサーバーには送信されません（ブラウザのデータを消去すると失われます）。</p>
+<p>学習の記録、設定、自作問題などはブラウザの保存領域（localStorage・IndexedDB）に保存されます。これらは利用者の端末内にあり、当方のサーバーには送信されません。</p>
+<p>次の操作をすると、この記録は消え、元に戻せません。</p>
+<ol>
+<li>ブラウザの「閲覧履歴データの削除」などで Cookie やサイトのデータを消したとき（Chrome：設定 →「プライバシーとセキュリティ」→「閲覧履歴データの削除」で「Cookie と他のサイトデータ」にチェックを入れて削除した場合。iPhone の Safari：設定 →「Safari」→「履歴と Web サイトデータを消去」）。</li>
+<li>本アプリのサイト（yomikai.tsunashiman.com）のデータだけを個別に削除したとき。</li>
+<li>ブラウザや、ホーム画面に追加したアプリをアンインストール・再インストールしたとき。</li>
+<li>端末を初期化したとき、または機種変更で別の端末に移ったとき（記録は端末ごとに保存され、自動では引き継がれません）。</li>
+<li>シークレットモード／プライベートブラウズで使ったとき（ウィンドウを閉じると消えます）。</li>
+<li>iPhone・iPad の Safari でブラウザのまま使っていて、7 日以上開かなかったとき（Safari の仕様で、使われていないサイトのデータが自動で削除されることがあります。ホーム画面に追加して使うと、この対象になりません）。</li>
+</ol>
+<p>また、端末の空き容量が少なくなると、ブラウザが古いサイトのデータを自動で削除することがあります。本アプリは起動時にブラウザへデータの保持を要求しますが（対応ブラウザのみ）、確実ではありません。ホーム画面に追加（インストール）して使うと、消えにくくなります。</p>
 
 <h2>2. 利用目的</h2>
 <ul>
