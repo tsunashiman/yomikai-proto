@@ -6,7 +6,7 @@
 declare(strict_types=1);
 
 const APP_ID = 'yomikai';
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const SECRETS_FILE = '/home/tsunashiman/secrets/db.json';
 
 date_default_timezone_set('Asia/Tokyo');
@@ -210,6 +210,62 @@ function ddl_v1(): array
     ];
 }
 
+/* v2（v59）：アカウント（メールのリンクでログイン）・セッション・有料プランの照合。accounts は屋号の全アプリ共通、entitlements は app_id ごと */
+function ddl_v2(): array
+{
+    return [
+        "CREATE TABLE IF NOT EXISTS `accounts` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            `email` VARCHAR(190) NOT NULL,
+            `email_norm` VARCHAR(190) NOT NULL,
+            `created_at` DATETIME NOT NULL,
+            `last_login_at` DATETIME NULL,
+            `note` VARCHAR(200) NOT NULL DEFAULT '',
+            UNIQUE KEY `uq_email` (`email_norm`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        "CREATE TABLE IF NOT EXISTS `login_tokens` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            `app_id` VARCHAR(32) NOT NULL,
+            `email_norm` VARCHAR(190) NOT NULL,
+            `token_hash` CHAR(64) NOT NULL,
+            `did` VARCHAR(24) NOT NULL DEFAULT '',
+            `created_at` DATETIME NOT NULL,
+            `expires_at` DATETIME NOT NULL,
+            `used_at` DATETIME NULL,
+            `ip_hash` CHAR(16) NOT NULL DEFAULT '',
+            UNIQUE KEY `uq_tok` (`token_hash`),
+            KEY `ix_email` (`email_norm`, `created_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        "CREATE TABLE IF NOT EXISTS `sessions` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            `app_id` VARCHAR(32) NOT NULL,
+            `account_id` BIGINT UNSIGNED NOT NULL,
+            `token_hash` CHAR(64) NOT NULL,
+            `did` VARCHAR(24) NOT NULL DEFAULT '',
+            `created_at` DATETIME NOT NULL,
+            `expires_at` DATETIME NOT NULL,
+            `last_seen_at` DATETIME NULL,
+            `revoked_at` DATETIME NULL,
+            `ua` VARCHAR(200) NOT NULL DEFAULT '',
+            UNIQUE KEY `uq_sess` (`token_hash`),
+            KEY `ix_acc` (`account_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        "CREATE TABLE IF NOT EXISTS `entitlements` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            `account_id` BIGINT UNSIGNED NOT NULL,
+            `app_id` VARCHAR(32) NOT NULL,
+            `plan` VARCHAR(24) NOT NULL DEFAULT 'free',
+            `until` DATE NULL,
+            `source` VARCHAR(24) NOT NULL DEFAULT 'manual',
+            `ref` VARCHAR(64) NOT NULL DEFAULT '',
+            `status` VARCHAR(16) NOT NULL DEFAULT 'active',
+            `updated_at` DATETIME NOT NULL,
+            `note` VARCHAR(200) NOT NULL DEFAULT '',
+            UNIQUE KEY `uq_acc_app` (`account_id`, `app_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ];
+}
+
 function migrate(PDO $pdo): void
 {
     $v = 0;
@@ -217,7 +273,53 @@ function migrate(PDO $pdo): void
     catch (PDOException $e) { $pdo->exec('CREATE TABLE IF NOT EXISTS `schema_version` (`id` TINYINT NOT NULL PRIMARY KEY, `v` INT NOT NULL, `at` DATETIME NOT NULL) ENGINE=InnoDB'); }
     if ($v >= SCHEMA_VERSION) return;
     if ($v < 1) foreach (ddl_v1() as $sql) $pdo->exec($sql);
+    if ($v < 2) foreach (ddl_v2() as $sql) $pdo->exec($sql);
     $pdo->prepare('INSERT INTO `schema_version` (`id`, `v`, `at`) VALUES (1, ?, NOW()) ON DUPLICATE KEY UPDATE `v` = ?, `at` = NOW()')->execute([SCHEMA_VERSION, SCHEMA_VERSION]);
+}
+
+/* ---- アカウント・プラン（共通の判定） ---- */
+const PAID_PLANS = ['month', 'year', 'gift', 'tester'];
+function plan_is_pro(?array $ent): bool
+{
+    if (!$ent || ($ent['status'] ?? 'active') !== 'active') return false;
+    if (!in_array((string)($ent['plan'] ?? 'free'), PAID_PLANS, true)) return false;
+    $until = $ent['until'] ?? null;
+    return $until === null || $until === '' || (string)$until >= today();
+}
+function plan_label(string $plan): string
+{
+    return ['free' => '無料', 'month' => 'サブスク（月額）', 'year' => 'サブスク（年額）', 'gift' => 'ギフト（無料で付与）', 'tester' => 'テスター'][$plan] ?? $plan;
+}
+/* アカウントの要約（アプリに返す形）：email・plan・until・pro */
+function account_info(PDO $pdo, int $accountId): ?array
+{
+    $st = $pdo->prepare('SELECT `id`, `email`, `created_at`, `last_login_at` FROM `accounts` WHERE `id` = ?'); $st->execute([$accountId]);
+    $a = $st->fetch(); if (!$a) return null;
+    $st = $pdo->prepare('SELECT `plan`, `until`, `source`, `status`, `updated_at` FROM `entitlements` WHERE `account_id` = ? AND `app_id` = ?'); $st->execute([$accountId, APP_ID]);
+    $e = $st->fetch() ?: null;
+    return ['email' => $a['email'], 'since' => substr((string)$a['created_at'], 0, 10), 'plan' => $e ? $e['plan'] : 'free', 'planLabel' => plan_label($e ? $e['plan'] : 'free'), 'until' => $e && $e['until'] ? (string)$e['until'] : null, 'source' => $e ? $e['source'] : '', 'pro' => plan_is_pro($e)];
+}
+/* セッションの照合：有効なら account_id、無ければ 0 */
+function session_account(PDO $pdo, string $rawToken): int
+{
+    if (!preg_match('/^[0-9a-f]{64}$/', $rawToken)) return 0;
+    $st = $pdo->prepare('SELECT `id`, `account_id` FROM `sessions` WHERE `app_id` = ? AND `token_hash` = ? AND `revoked_at` IS NULL AND `expires_at` > NOW()'); $st->execute([APP_ID, hash('sha256', $rawToken)]);
+    $r = $st->fetch(); if (!$r) return 0;
+    $pdo->prepare('UPDATE `sessions` SET `last_seen_at` = NOW() WHERE `id` = ?')->execute([(int)$r['id']]);
+    return (int)$r['account_id'];
+}
+/* メール送信（さくらの sendmail）。差出人はドメインのアドレス（SPF が通る） */
+function mail_from(): string { try { return (string)(cfg()['mail_from'] ?? 'noreply@tsunashiman.com'); } catch (Throwable $e) { return 'noreply@tsunashiman.com'; } }
+function mail_reply(): string { try { return (string)(cfg()['mail_reply'] ?? 'info@tsunashiman.com'); } catch (Throwable $e) { return 'info@tsunashiman.com'; } }
+function app_url(): string { try { return (string)(cfg()['app_url'] ?? 'https://yomikai.tsunashiman.com/'); } catch (Throwable $e) { return 'https://yomikai.tsunashiman.com/'; } }
+function send_mail(string $to, string $subject, string $body): bool
+{
+    /* 試験用：db.json に "mail_mode": "log" があれば送らずに secrets/mail.log へ書く（本番の db.json には無い） */
+    try { if ((cfg()['mail_mode'] ?? '') === 'log') { file_put_contents(dirname(SECRETS_FILE) . '/mail.log', "=== " . now3() . " to: $to\nsubject: $subject\n$body\n", FILE_APPEND); return true; } } catch (Throwable $e) { /* 通常送信へ */ }
+    mb_language('ja'); mb_internal_encoding('UTF-8');
+    $from = mail_from();
+    $headers = 'From: ' . mb_encode_mimeheader('論理的読解タイムアタック', 'UTF-8') . ' <' . $from . ">\r\n" . 'Reply-To: ' . mail_reply() . "\r\n" . 'Content-Type: text/plain; charset=UTF-8' . "\r\n" . 'Content-Transfer-Encoding: 8bit' . "\r\n" . 'X-Mailer: lrta' . "\r\n";
+    try { return @mb_send_mail($to, $subject, $body, $headers, '-f ' . $from); } catch (Throwable $e) { return false; }
 }
 
 /* ---- 簡易レート制限（IP ごと・時間窓ごとの回数） ---- */
