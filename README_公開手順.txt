@@ -5,10 +5,14 @@ PWA公開用 一式（論理的読解タイムアタック 試作版）
 Android の Chrome では「アプリをインストール」、PC の Chrome／Edge では
 アドレスバーの「インストール」から、アプリとして入れられます。
 
-■ この試作版の公開先（設定済み）
- ・置き場所（GitHub）  ：https://github.com/tsunashiman/yomikai-proto
- ・アプリの URL        ：https://tsunashiman.github.io/yomikai-proto/
- ・更新版を置くときは、このフォルダの中身を上の置き場所にアップロードし直します（Claude に頼めば代行します）。
+■ この試作版の公開先（設定済み・v57 で さくらのレンタルサーバ へ引っ越し）
+ ・アプリの URL（公式の住所）：https://yomikai.tsunashiman.com/
+ ・置き場所（サーバー）      ：さくらのレンタルサーバ（tsunashiman.sakura.ne.jp）の /home/tsunashiman/www/yomikai/
+ ・ソースの保管庫（GitHub）  ：https://github.com/tsunashiman/yomikai-proto
+   GitHub の main に置く（＝毎日の新作生成ルーティンが置く）と、GitHub Actions（.github/workflows/deploy.yml）が
+   自動でサーバーの www/yomikai/ に同期します（反映まで 1〜2 分）。手動で置き直すときも GitHub に上げれば十分です。
+ ・旧住所 https://tsunashiman.github.io/yomikai-proto/ は引っ越し期間中だけ動き、その後は「公式の住所で開いてください」の案内になります。
+ ・.htaccess は さくら（Apache）用の設定（文字コード・MIME・キャッシュ）です。GitHub Pages では無視されます。
 
 ■ 別の場所に置くとき（GitHub Pages・無料・約10分）
  1. https://github.com にログイン（アカウントがなければ作成）

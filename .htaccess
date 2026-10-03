@@ -1,0 +1,19 @@
+# さくらのレンタルサーバ（Apache）用。GitHub Pages では無視される
+AddDefaultCharset UTF-8
+AddType application/manifest+json .webmanifest
+AddType application/json .json
+AddType text/javascript .js
+AddType text/markdown .md
+<IfModule mod_headers.c>
+  # アプリ本体と service worker は常に最新を確認（更新の反映を早く）
+  <FilesMatch "^(index\.html|sw\.js)$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+  # 新作ストック・点呼・問題データも都度確認
+  <FilesMatch "\.(json)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+  Header set X-Content-Type-Options "nosniff"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+Options -Indexes
