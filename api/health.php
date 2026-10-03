@@ -4,7 +4,7 @@
 declare(strict_types=1);
 require __DIR__ . '/_lib.php';
 cors();
-$o = ['ok' => true, 'app' => APP_ID, 'time' => now3(), 'php' => PHP_VERSION, 'schema' => SCHEMA_VERSION];
+$o = ['ok' => true, 'app' => APP_ID, 'time' => now3(), 'php' => PHP_VERSION, 'sapi' => PHP_SAPI, 'mailXHeader' => (string)ini_get('mail.add_x_header'), 'schema' => SCHEMA_VERSION];
 try {
     $pdo = db();
     $o['db'] = 'ok';

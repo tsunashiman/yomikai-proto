@@ -6,3 +6,7 @@
   Header set Cache-Control "no-store"
 </IfModule>
 Options -Indexes
+# メール送信（mb_send_mail）に PHP が付ける X-PHP-Originating-Script ヘッダーを止める（迷惑メール判定の減点要因。モジュール版 PHP 用）
+<IfModule mod_php.c>
+  php_flag mail.add_x_header Off
+</IfModule>

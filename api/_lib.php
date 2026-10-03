@@ -362,7 +362,7 @@ function session_account(PDO $pdo, string $rawToken): int
     return (int)$r['account_id'];
 }
 /* メール送信（さくらの sendmail）。差出人はドメインのアドレス（SPF が通る） */
-function mail_from(): string { try { return (string)(cfg()['mail_from'] ?? 'noreply@tsunashiman.com'); } catch (Throwable $e) { return 'noreply@tsunashiman.com'; } }
+function mail_from(): string { try { return (string)(cfg()['mail_from'] ?? 'info@tsunashiman.com'); } catch (Throwable $e) { return 'info@tsunashiman.com'; } } /* v60：実在する受信箱 info@ を差出人にする（返信も届く。noreply@ は受信箱が無く、宛先不明の戻りが届かない） */
 function mail_reply(): string { try { return (string)(cfg()['mail_reply'] ?? 'info@tsunashiman.com'); } catch (Throwable $e) { return 'info@tsunashiman.com'; } }
 function app_url(): string { try { return (string)(cfg()['app_url'] ?? 'https://yomikai.tsunashiman.com/'); } catch (Throwable $e) { return 'https://yomikai.tsunashiman.com/'; } }
 function send_mail(string $to, string $subject, string $body): bool
@@ -371,7 +371,8 @@ function send_mail(string $to, string $subject, string $body): bool
     try { if ((cfg()['mail_mode'] ?? '') === 'log') { file_put_contents(dirname(SECRETS_FILE) . '/mail.log', "=== " . now3() . " to: $to\nsubject: $subject\n$body\n", FILE_APPEND); return true; } } catch (Throwable $e) { /* 通常送信へ */ }
     mb_language('ja'); mb_internal_encoding('UTF-8');
     $from = mail_from();
-    $headers = 'From: ' . mb_encode_mimeheader('まじめに速読トレ', 'UTF-8') . ' <' . $from . ">\r\n" . 'Reply-To: ' . mail_reply() . "\r\n" . 'Content-Type: text/plain; charset=UTF-8' . "\r\n" . 'Content-Transfer-Encoding: 8bit' . "\r\n" . 'X-Mailer: lrta' . "\r\n";
+    /* 迷惑メール判定を避けるため：MIME-Version を付け、X-Mailer のような独自ヘッダーは付けない（PHP が付ける X-PHP-Originating-Script は api/.htaccess の mail.add_x_header Off で止める） */
+    $headers = 'From: ' . mb_encode_mimeheader('まじめに速読トレ', 'UTF-8') . ' <' . $from . ">\r\n" . 'Reply-To: ' . mail_reply() . "\r\n" . 'MIME-Version: 1.0' . "\r\n" . 'Content-Type: text/plain; charset=UTF-8' . "\r\n" . 'Content-Transfer-Encoding: 8bit' . "\r\n";
     try { return @mb_send_mail($to, $subject, $body, $headers, '-f ' . $from); } catch (Throwable $e) { return false; }
 }
 
