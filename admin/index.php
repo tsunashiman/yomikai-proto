@@ -26,7 +26,7 @@ function set_login_cookie(bool $on): void
 }
 function page(string $title, string $body, bool $nav = true): never
 {
-    $views = ['summary' => 'テスター別まとめ', 'log' => '利用ログ', 'feedback' => 'ご意見・評価', 'ranking' => 'ランキング', 'items' => '文別の成績', 'accounts' => 'アカウント'];
+    $views = ['summary' => 'テスター別まとめ', 'log' => '利用ログ', 'feedback' => 'ご意見・評価', 'ranking' => 'ランキング', 'items' => '文別の成績', 'accounts' => 'アカウント', 'sales' => '売上'];
     $cur = (string)($_GET['v'] ?? 'summary');
     $links = '';
     if ($nav) foreach ($views as $k => $name) $links .= '<a href="?v=' . $k . '"' . ($cur === $k ? ' class="on"' : '') . '>' . $name . '</a>';
@@ -133,6 +133,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['setplan'])) {
             ->execute([$aid, APP_ID, $plan, $until !== '' ? $until : null, $note, $plan, $until !== '' ? $until : null, $note]);
     }
     header('Location: index.php?v=accounts&q=' . urlencode((string)($_POST['q'] ?? '')) . '&saved=1'); exit;
+}
+/* PAY.JP との照合（アカウントの行の「PAY.JP と照合」）：定期課金の状態を問い合わせ直して反映する */
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['paysync'])) {
+    if (!hash_equals($csrf, (string)($_POST['t'] ?? ''))) page('エラー', '<div class="card"><h1>やり直してください</h1><p>画面を開き直してから、もう一度操作してください。</p></div>');
+    $aid = (int)($_POST['id'] ?? 0); $msg = 'synced';
+    if ($aid > 0) { try { $r = payjp_sync($pdo, $aid, true); $msg = $r ? 'synced' : 'nosub'; } catch (Throwable $e) { $msg = 'error'; } }
+    header('Location: index.php?v=accounts&q=' . urlencode((string)($_POST['q'] ?? '')) . '&paysync=' . $msg); exit;
 }
 function del_form(string $kind, string $id, string $label, string $confirm, string $extra = ''): string
 {
@@ -256,31 +263,62 @@ if ($v === 'items') {
 if ($v === 'accounts') {
     $qs = s($_GET['q'] ?? '', 100);
     $wq = $qs !== '' ? ' WHERE a.`email` LIKE ' . $pdo->quote('%' . $qs . '%') : '';
-    $rows = $q('SELECT a.`id`, a.`email`, a.`created_at`, a.`last_login_at`, a.`note` AS anote, e.`plan`, e.`until`, e.`source`, e.`status`, e.`updated_at`, e.`note`,
+    $rows = $q('SELECT a.`id`, a.`email`, a.`created_at`, a.`last_login_at`, a.`note` AS anote, a.`payjp_customer`, e.`plan`, e.`until`, e.`source`, e.`ref`, e.`status`, e.`updated_at`, e.`note`, e.`period_end`, e.`canceled_at`, e.`tickets_granted`, e.`card_brand`, e.`card_last4`,
         (SELECT COUNT(*) FROM `sessions` s WHERE s.`account_id` = a.`id` AND s.`revoked_at` IS NULL AND s.`expires_at` > NOW()) AS live_sessions
         FROM `accounts` a LEFT JOIN `entitlements` e ON e.`account_id` = a.`id` AND e.`app_id` = ' . $pdo->quote(APP_ID) . $wq . ' ORDER BY a.`created_at` DESC LIMIT 300');
-    $head = ['メールアドレス', '登録', '最終ログイン', 'プラン', '有効期限', '出どころ', 'ログイン中の端末', 'メモ'];
+    $head = ['メールアドレス', '登録', '最終ログイン', 'プラン', '有効期限', '出どころ', '決済（PAY.JP）', 'チケット累計', 'ログイン中の端末', 'メモ'];
     $table = [];
-    foreach ($rows as $r) $table[] = [$r['email'], substr((string)$r['created_at'], 0, 10), dt($r['last_login_at']), plan_label((string)($r['plan'] ?? 'free')) . (plan_is_pro($r) ? '' : (($r['plan'] ?? 'free') !== 'free' ? '（期限切れ）' : '')), $r['until'] ?: '—', $r['source'] ?: '', (int)$r['live_sessions'], $r['note'] ?: ''];
+    foreach ($rows as $r) {
+        $pay = '';
+        if (($r['source'] ?? '') === 'payjp' && ($r['ref'] ?? '') !== '') {
+            $pay = (($r['status'] ?? '') === 'active' ? (!empty($r['canceled_at']) ? '解約済み（期間末まで）' : '継続中') : (($r['status'] ?? '') === 'past_due' ? '支払い失敗で停止' : '終了'))
+                . ($r['period_end'] ? '・次回 ' . substr((string)$r['period_end'], 0, 10) : '') . ($r['card_last4'] !== '' ? '・' . $r['card_brand'] . ' ****' . $r['card_last4'] : '');
+        } elseif (($r['payjp_customer'] ?? '') !== '') $pay = 'カード登録あり' . ($r['card_last4'] !== '' ? '（' . $r['card_brand'] . ' ****' . $r['card_last4'] . '）' : '');
+        $table[] = [$r['email'], substr((string)$r['created_at'], 0, 10), dt($r['last_login_at']), plan_label((string)($r['plan'] ?? 'free')) . (plan_is_pro($r) ? '' : (($r['plan'] ?? 'free') !== 'free' ? '（期限切れ）' : '')), $r['until'] ?: '—', $r['source'] ?: '', $pay, (int)($r['tickets_granted'] ?? 0), (int)$r['live_sessions'], $r['note'] ?: ''];
+    }
     if ($csv) csv_out('アカウント', $head, $table);
     $tot = $q('SELECT COUNT(*) c FROM `accounts`')[0]['c'];
     $pro = $q('SELECT COUNT(*) c FROM `entitlements` WHERE `app_id` = ? AND `status` = \'active\' AND `plan` IN (\'month\',\'year\',\'gift\',\'tester\') AND (`until` IS NULL OR `until` >= CURDATE())', [APP_ID])[0]['c'];
-    $b = '<h1>アカウント</h1>' . $deletedNote . (isset($_GET['saved']) ? '<p class="small ok">プランを保存しました。</p>' : '') . (isset($_GET['revoked']) ? '<p class="small ok">ログインを解除しました（' . (int)$_GET['revoked'] . ' 端末）。</p>' : '');
+    $b = '<h1>アカウント</h1>' . $deletedNote . (isset($_GET['saved']) ? '<p class="small ok">プランを保存しました。</p>' : '') . (isset($_GET['revoked']) ? '<p class="small ok">ログインを解除しました（' . (int)$_GET['revoked'] . ' 端末）。</p>' : '')
+        . (isset($_GET['paysync']) ? '<p class="small ' . ($_GET['paysync'] === 'synced' ? 'ok' : 'ng') . '">' . (['synced' => 'PAY.JP と照合しました。', 'nosub' => 'このアカウントには PAY.JP の定期課金がありません。', 'error' => '照合でエラーが起きました。'][(string)$_GET['paysync']] ?? '') . '</p>' : '');
     $b .= '<div class="card kpi"><div><span class="mut small">アカウント数</span><b>' . (int)$tot . '</b></div><div><span class="mut small">有料相当（有効）</span><b>' . (int)$pro . '</b></div></div>';
     $b .= '<div class="card"><form class="row" method="get"><input type="hidden" name="v" value="accounts"><input type="text" name="q" value="' . h($qs) . '" placeholder="メールアドレスで検索"><button type="submit">検索</button><a class="btn ghost" style="margin-left:auto" href="?v=accounts&csv=1">CSV</a></form>';
-    $b .= '<p class="small mut">メールのリンクでログインした人の一覧。「プラン」はこのアプリでの有料相当の扱い（month／year＝サブスク、gift＝無料で付与、tester＝テスター、free＝無料）。決済連携ができるまでは、ここで手動で付与する。有効期限が空ならずっと有効。</p>';
+    $b .= '<p class="small mut">メールのリンクでログインした人の一覧。「プラン」はこのアプリでの有料相当の扱い（month／year＝サブスク、gift＝無料で付与、tester＝テスター、free＝無料）。「出どころ」が payjp の行は PAY.JP の定期課金に連動している（手で「保存」すると manual に戻り、連動が切れるので注意。返金・特例は PAY.JP の管理画面で行い、必要ならここで日付を直す）。有効期限が空ならずっと有効。決済の状態は ' . h(payjp_cfg()['enabled'] ? ('PAY.JP ' . payjp_cfg()['mode'] . ' 環境') : '未接続（模擬）') . '。</p>';
     $b .= '<table><tr>' . implode('', array_map(fn($x) => '<th>' . h($x) . '</th>', $head)) . '<th>操作</th></tr>';
     foreach ($rows as $i => $r) {
         $aid = (int)$r['id'];
         $form = '<form method="post" class="row" style="gap:6px;flex-wrap:nowrap"><input type="hidden" name="setplan" value="1"><input type="hidden" name="id" value="' . $aid . '"><input type="hidden" name="t" value="' . h($csrf) . '"><input type="hidden" name="q" value="' . h($qs) . '">'
             . '<select name="plan">' . implode('', array_map(fn($p) => '<option value="' . $p . '"' . (($r['plan'] ?? 'free') === $p ? ' selected' : '') . '>' . h(plan_label($p)) . '</option>', ['free', 'month', 'year', 'gift', 'tester'])) . '</select>'
             . '<input type="date" name="until" value="' . h($r['until'] ?: '') . '" title="有効期限（空＝無期限）"><input type="text" name="note" value="' . h($r['note'] ?: '') . '" placeholder="メモ" style="width:120px"><button type="submit">保存</button></form>'
+            . ((($r['source'] ?? '') === 'payjp' && ($r['ref'] ?? '') !== '') ? ' <form method="post" style="display:inline"><input type="hidden" name="paysync" value="1"><input type="hidden" name="id" value="' . $aid . '"><input type="hidden" name="t" value="' . h($csrf) . '"><input type="hidden" name="q" value="' . h($qs) . '"><button type="submit" class="btn ghost" style="padding:2px 8px;font-size:12px">PAY.JP と照合</button></form>' : '')
             . ' ' . del_form('sessions', (string)$aid, 'ログイン解除', $r['email'] . ' のログインを全端末で解除します。よろしいですか？', '<input type="hidden" name="q" value="' . h($qs) . '">')
             . ' ' . del_form('account', (string)$aid, '削除', $r['email'] . ' のアカウント・プラン・ログインを削除します（利用ログやランキングの記録は残ります）。元に戻せません。よろしいですか？');
-        $b .= '<tr>' . implode('', array_map(fn($x, $j) => '<td class="' . ($j === 6 ? 'num' : '') . '">' . h($x) . '</td>', $table[$i], array_keys($table[$i]))) . '<td>' . $form . '</td></tr>';
+        $b .= '<tr>' . implode('', array_map(fn($x, $j) => '<td class="' . (in_array($j, [7, 8], true) ? 'num' : '') . '">' . h($x) . '</td>', $table[$i], array_keys($table[$i]))) . '<td>' . $form . '</td></tr>';
     }
-    if (!$rows) $b .= '<tr><td colspan="9" class="mut">まだアカウントはありません（アプリの設定 →「アカウント」からメールでログインすると、ここに載ります）。</td></tr>';
+    if (!$rows) $b .= '<tr><td colspan="11" class="mut">まだアカウントはありません（アプリの設定 →「アカウント」からメールでログインすると、ここに載ります）。</td></tr>';
     page('アカウント', $b . '</table></div>');
+}
+
+if ($v === 'sales') {
+    $rows = $q('SELECT p.`id`, p.`created_at`, a.`email`, p.`kind`, p.`plan`, p.`amount`, p.`status`, p.`payjp_charge`, p.`payjp_sub`, p.`livemode`, p.`note` FROM `payments` p LEFT JOIN `accounts` a ON a.`id` = p.`account_id` WHERE p.`app_id` = ? ORDER BY p.`created_at` DESC, p.`id` DESC LIMIT 500', [APP_ID]);
+    $kindName = ['subscribe' => 'サブスク開始', 'renew' => 'サブスク更新', 'ticket' => 'チケット', 'refund' => '返金'];
+    $head = ['日時', 'メールアドレス', '種類', 'プラン／内容', '金額（円）', '状態', '環境', 'PAY.JP の支払い ID', 'PAY.JP の定期課金 ID', 'メモ'];
+    $table = [];
+    foreach ($rows as $r) $table[] = [dt($r['created_at']), $r['email'] ?? '（削除済み）', $kindName[$r['kind']] ?? $r['kind'], $r['plan'] !== '' ? (plan_label($r['plan']) !== $r['plan'] ? plan_label($r['plan']) : (PAY_TICKETS[$r['plan']]['name'] ?? $r['plan'])) : '', (int)$r['amount'], $r['status'] === 'paid' ? '支払い済み' : ($r['status'] === 'refunded' ? '返金済み' : $r['status']), $r['livemode'] ? '本番' : 'テスト', $r['payjp_charge'], $r['payjp_sub'], $r['note']];
+    if ($csv) csv_out('売上', $head, $table);
+    $sum = $q("SELECT COUNT(*) c, COALESCE(SUM(CASE WHEN `status` = 'paid' THEN `amount` ELSE 0 END), 0) total, COALESCE(SUM(CASE WHEN `status` = 'paid' AND `created_at` >= DATE_FORMAT(NOW(), '%Y-%m-01') THEN `amount` ELSE 0 END), 0) month_total FROM `payments` WHERE `app_id` = ? AND `livemode` = 1", [APP_ID])[0];
+    $subs = $q("SELECT COUNT(*) c FROM `entitlements` WHERE `app_id` = ? AND `source` = 'payjp' AND `status` = 'active' AND `canceled_at` IS NULL AND (`until` IS NULL OR `until` >= CURDATE())", [APP_ID])[0]['c'];
+    $hooks = $q('SELECT `received_at`, `type`, `object_id`, `verified`, `handled` FROM `webhook_log` ORDER BY `id` DESC LIMIT 20');
+    $b = '<h1>売上（決済の記録）</h1><div class="card kpi"><div><span class="mut small">継続中のサブスク（PAY.JP）</span><b>' . (int)$subs . '</b></div><div><span class="mut small">本番の売上 今月（円）</span><b>' . number_format((int)$sum['month_total']) . '</b></div><div><span class="mut small">本番の売上 累計（円）</span><b>' . number_format((int)$sum['total']) . '</b></div><div><span class="mut small">決済の環境</span><b style="font-size:15px">' . h(payjp_cfg()['enabled'] ? payjp_cfg()['mode'] . (payjp_cfg()['mock'] ? '（模擬）' : '') : '未接続') . '</b></div></div>';
+    $b .= '<div class="card"><div class="row"><span class="small mut">サブスクの開始・更新・チケットの都度払いの記録（PAY.JP の管理画面の「売上」と突き合わせる。更新は、アプリの照合か Webhook が期間の更新に気づいた時点で記録される）。金額は税込。</span><a class="btn ghost" style="margin-left:auto" href="?v=sales&csv=1">CSV</a></div>';
+    $b .= '<table><tr>' . implode('', array_map(fn($x) => '<th>' . h($x) . '</th>', $head)) . '</tr>';
+    foreach ($table as $row) $b .= '<tr>' . implode('', array_map(fn($x, $j) => '<td class="' . ($j === 4 ? 'num' : '') . '">' . h($x) . '</td>', $row, array_keys($row))) . '</tr>';
+    if (!$table) $b .= '<tr><td colspan="10" class="mut">まだ決済の記録はありません。</td></tr>';
+    $b .= '</table></div>';
+    $b .= '<div class="card"><h2 style="margin-top:0">Webhook の受信（直近 20 件）</h2><p class="small mut">PAY.JP の管理画面「Webhook」で送信先 https://yomikai.tsunashiman.com/api/payjp_webhook.php を登録すると、更新・解約・支払い失敗がすぐに反映される（登録しなくても、アプリの照合で 6 時間以内に反映される）。verified が 0 のときは、Secret PAYJP_WEBHOOK_TOKEN が未設定か不一致。</p><table><tr><th>受信</th><th>種類</th><th>対象 ID</th><th>検証</th><th>処理</th></tr>';
+    foreach ($hooks as $hk) $b .= '<tr><td>' . h(dt($hk['received_at'])) . '</td><td>' . h($hk['type']) . '</td><td>' . h($hk['object_id']) . '</td><td>' . ((int)$hk['verified'] ? '<span class="ok">済</span>' : '<span class="mut">—</span>') . '</td><td>' . h($hk['handled']) . '</td></tr>';
+    if (!$hooks) $b .= '<tr><td colspan="5" class="mut">まだ受信はありません。</td></tr>';
+    page('売上', $b . '</table></div>');
 }
 
 page('不明', '<div class="card">そのページはありません。</div>');
