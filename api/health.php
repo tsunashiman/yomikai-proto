@@ -16,6 +16,11 @@ try {
     $o['rows'] = $cnt;
     try { $o['adminKey'] = !empty(cfg()['admin_key']); } catch (Throwable $e) { $o['adminKey'] = false; }
     $pc = payjp_cfg(); $o['payjp'] = $pc['enabled'] ? ($pc['mock'] ? 'mock' : $pc['mode']) : 'off'; /* off＝鍵なし（模擬のまま）、test＝テスト環境の鍵、live＝本番の鍵 */
+    if (isset($_GET['pay']) && $pc['enabled'] && !$pc['mock']) { /* ?pay=1：秘密鍵が PAY.JP に通るか（プラン一覧を 1 件だけ取る。鍵そのものは返さない） */
+        $r = payjp_request('GET', 'plans', ['limit' => 1]);
+        $o['payjpKey'] = $r['ok'] ? 'ok' : ('error:' . ($r['data']['code'] ?? $r['data']['type'] ?? $r['status']));
+        if ($r['ok']) $o['payjpPlans'] = array_map(fn($x) => ['id' => $x['id'], 'amount' => $x['amount'], 'interval' => $x['interval']], $r['data']['data'] ?? []);
+    }
 } catch (Throwable $e) {
     $o['ok'] = false;
     $o['db'] = 'not-ready';
