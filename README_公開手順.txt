@@ -14,6 +14,17 @@ Android の Chrome では「アプリをインストール」、PC の Chrome／
  ・旧住所 https://tsunashiman.github.io/yomikai-proto/ は引っ越し期間中だけ動き、その後は「公式の住所で開いてください」の案内になります。
  ・.htaccess は さくら（Apache）用の設定（文字コード・MIME・キャッシュ）です。GitHub Pages では無視されます。
 
+■ サーバー側（v58・さくらでだけ動く PHP）
+ ・api/collect.php  ：ご意見・評価と利用ログ（テスター版）の受信。アプリの feedbackEndpoint がここを指す（Google スプレッドシートは不要になった）
+ ・api/ranking.php  ：ランキング。その日の「今日の20問」の初回の結果を集め、同じ20問を解いた人同士の順位表を返す
+ ・api/health.php   ：動作確認（https://yomikai.tsunashiman.com/api/health.php で DB につながっているか分かる）
+ ・admin/           ：開発者用の管理ページ https://yomikai.tsunashiman.com/admin/（テスター別まとめ・利用ログ・ご意見・ランキング・文別の成績・CSV）
+                     合言葉は GitHub の Secret ADMIN_KEY。アプリからはどこにもリンクしていない
+ ・データベース     ：さくらの MySQL 8.0（tsunashiman_app）。接続情報は GitHub の Secret SAKURA_DB_PASSWORD から、自動反映のたびに
+                     サーバーの公開領域の外（/home/tsunashiman/secrets/db.json）へ書き出される。テーブルは最初のアクセスで自動作成
+ ・GitHub Pages など PHP の無い場所に置いた場合、api/ は動かないので、順位表はサンプルプレイヤーとの比較だけになり、
+   ご意見は「共有／メール／コピー」で送る画面になる（アプリ自体は動く）
+
 ■ 別の場所に置くとき（GitHub Pages・無料・約10分）
  1. https://github.com にログイン（アカウントがなければ作成）
  2. 右上「＋」→「New repository」。名前は例：yomikai-proto、Public を選び Create
