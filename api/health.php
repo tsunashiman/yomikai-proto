@@ -19,5 +19,8 @@ try {
     $o['ok'] = false;
     $o['db'] = 'not-ready';
     $o['why'] = err_kind($e);
+    /* 原因の切り分け用（パスワードは含まれない。MySQL の返事そのもの：どのユーザー名・どのホストで断られたかが分かる） */
+    $o['detail'] = mb_substr(preg_replace('/\s+/', ' ', $e->getMessage()), 0, 200);
+    $o['tried'] = ['hosts' => array_values(array_filter((function () { try { $c = cfg(); return $c['hosts'] ?? [$c['host'] ?? '']; } catch (Throwable $x) { return []; } })(), 'is_string')), 'users' => (function () { try { $c = cfg(); return $c['users'] ?? [$c['user'] ?? '']; } catch (Throwable $x) { return []; } })()];
 }
 out($o, $o['ok'] ? 200 : 503);
