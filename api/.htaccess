@@ -1,0 +1,8 @@
+# API（PHP）用：共通部分（_ で始まるファイル）は直接開けないようにする。応答はキャッシュしない
+<FilesMatch "^_">
+  Require all denied
+</FilesMatch>
+<IfModule mod_headers.c>
+  Header set Cache-Control "no-store"
+</IfModule>
+Options -Indexes
