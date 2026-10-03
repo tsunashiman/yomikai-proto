@@ -6,6 +6,9 @@
 #   SAKURA_SSH_KEY     さくらに登録した公開鍵に対応する秘密鍵（OpenSSH 形式の全文）
 #   SAKURA_DB_PASSWORD データベース tsunashiman_app のパスワード → サーバーの公開領域の外 /home/tsunashiman/secrets/db.json に書き出す
 #   ADMIN_KEY          管理ページ（/admin/）に入る合言葉（任意。無ければ管理ページは「準備中」のまま）
+#   PAYJP_SECRET_KEY   PAY.JP の秘密鍵（sk_test_… か sk_live_…。任意。無ければ決済機能は無効＝模擬のまま）
+#   PAYJP_PUBLIC_KEY   PAY.JP の公開鍵（pk_test_… か pk_live_…。カード入力フォームに使う）
+#   PAYJP_WEBHOOK_TOKEN PAY.JP の Webhook トークン（whook_…。任意。管理画面の「Webhook」で確認。無ければ Webhook は ID の照合だけに使う）
 name: さくらへ反映（yomikai.tsunashiman.com）
 
 on:
@@ -63,6 +66,9 @@ jobs:
         env:
           SAKURA_DB_PASSWORD: ${{ secrets.SAKURA_DB_PASSWORD }}
           ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+          PAYJP_SECRET_KEY: ${{ secrets.PAYJP_SECRET_KEY }}
+          PAYJP_PUBLIC_KEY: ${{ secrets.PAYJP_PUBLIC_KEY }}
+          PAYJP_WEBHOOK_TOKEN: ${{ secrets.PAYJP_WEBHOOK_TOKEN }}
         run: |
           if [ -z "$SAKURA_DB_PASSWORD" ]; then echo "Secret SAKURA_DB_PASSWORD が未設定のため、DB の設定ファイルは置きません（api/ は『準備中』と答えます）"; exit 0; fi
           # 診断（値そのものは出さない）：文字数と、前後に空白・改行が混ざっていないか
@@ -83,7 +89,10 @@ jobs:
             "users": ["tsunashiman_app", "tsunashiman"],
             "pass": os.environ["SAKURA_DB_PASSWORD"].strip(),
             "charset": "utf8mb4",
-            "admin_key": os.environ.get("ADMIN_KEY", "").strip()
+            "admin_key": os.environ.get("ADMIN_KEY", "").strip(),
+            "payjp_secret": os.environ.get("PAYJP_SECRET_KEY", "").strip(),
+            "payjp_public": os.environ.get("PAYJP_PUBLIC_KEY", "").strip(),
+            "payjp_webhook_token": os.environ.get("PAYJP_WEBHOOK_TOKEN", "").strip()
           }, ensure_ascii=False))
           PY
           chmod 600 "$RUNNER_TEMP/db.json"
@@ -92,7 +101,7 @@ jobs:
             -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes" \
             "$RUNNER_TEMP/db.json" tsunashiman@tsunashiman.sakura.ne.jp:/home/tsunashiman/secrets/db.json
           rm -f "$RUNNER_TEMP/db.json"
-          echo "secrets/db.json を更新しました（管理ページの合言葉：$([ -n "$ADMIN_KEY" ] && echo 設定あり || echo 未設定)）"
+          echo "secrets/db.json を更新しました（管理ページの合言葉：$([ -n "$ADMIN_KEY" ] && echo 設定あり || echo 未設定)／PAY.JP：$(case "$PAYJP_SECRET_KEY" in sk_test_*) echo テスト環境の鍵;; sk_live_*) echo 本番の鍵;; "") echo 未設定;; *) echo 形式が不明;; esac)）"
 
       - name: 反映の確認
         run: |
