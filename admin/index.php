@@ -26,7 +26,7 @@ function set_login_cookie(bool $on): void
 }
 function page(string $title, string $body, bool $nav = true): never
 {
-    $views = ['summary' => 'テスター別まとめ', 'log' => '利用ログ', 'feedback' => 'ご意見・評価', 'ranking' => 'ランキング', 'items' => '文別の成績'];
+    $views = ['summary' => 'テスター別まとめ', 'log' => '利用ログ', 'feedback' => 'ご意見・評価', 'ranking' => 'ランキング', 'items' => '文別の成績', 'accounts' => 'アカウント'];
     $cur = (string)($_GET['v'] ?? 'summary');
     $links = '';
     if ($nav) foreach ($views as $k => $name) $links .= '<a href="?v=' . $k . '"' . ($cur === $k ? ' class="on"' : '') . '>' . $name . '</a>';
@@ -110,6 +110,29 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['del'])) {
         if ($id > 0) { $st = $pdo->prepare('DELETE FROM `feedback` WHERE `app_id` = ? AND `id` = ?'); $st->execute([APP_ID, $id]); $n = $st->rowCount(); }
         header('Location: index.php?v=feedback&deleted=' . $n); exit;
     }
+    if ($del === 'account') { /* アカウントとそのセッション・プランを削除（利用者からの削除依頼に使う） */
+        $id = (int)($_POST['id'] ?? 0);
+        if ($id > 0) { foreach (['sessions' => 'account_id', 'entitlements' => 'account_id', 'accounts' => 'id'] as $t => $col) { $st = $pdo->prepare('DELETE FROM `' . $t . '` WHERE `' . $col . '` = ?'); $st->execute([$id]); $n += $st->rowCount(); } }
+        header('Location: index.php?v=accounts&deleted=' . $n); exit;
+    }
+    if ($del === 'sessions') { /* ログイン状態を全端末で解除（本人からの依頼・不正時） */
+        $id = (int)($_POST['id'] ?? 0);
+        if ($id > 0) { $st = $pdo->prepare('UPDATE `sessions` SET `revoked_at` = NOW() WHERE `account_id` = ? AND `revoked_at` IS NULL'); $st->execute([$id]); $n = $st->rowCount(); }
+        header('Location: index.php?v=accounts&q=' . urlencode((string)($_POST['q'] ?? '')) . '&revoked=' . $n); exit;
+    }
+}
+/* ---- プランの手動設定（ギフト・テスター・返金対応など）。決済連携ができるまでの運用と、連携後の例外対応に使う ---- */
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['setplan'])) {
+    if (!hash_equals($csrf, (string)($_POST['t'] ?? ''))) page('エラー', '<div class="card"><h1>やり直してください</h1><p>画面を開き直してから、もう一度操作してください。</p></div>');
+    $aid = (int)($_POST['id'] ?? 0); $plan = s($_POST['plan'] ?? 'free', 24); $until = s($_POST['until'] ?? '', 10); $note = s($_POST['note'] ?? '', 200);
+    if (!in_array($plan, ['free', 'month', 'year', 'gift', 'tester'], true)) $plan = 'free';
+    if ($until !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $until)) $until = '';
+    if ($aid > 0) {
+        $pdo->prepare('INSERT INTO `entitlements` (`account_id`, `app_id`, `plan`, `until`, `source`, `ref`, `status`, `updated_at`, `note`) VALUES (?, ?, ?, ?, \'manual\', \'\', \'active\', NOW(), ?)
+            ON DUPLICATE KEY UPDATE `plan` = ?, `until` = ?, `source` = \'manual\', `status` = \'active\', `updated_at` = NOW(), `note` = ?')
+            ->execute([$aid, APP_ID, $plan, $until !== '' ? $until : null, $note, $plan, $until !== '' ? $until : null, $note]);
+    }
+    header('Location: index.php?v=accounts&q=' . urlencode((string)($_POST['q'] ?? '')) . '&saved=1'); exit;
 }
 function del_form(string $kind, string $id, string $label, string $confirm, string $extra = ''): string
 {
@@ -228,6 +251,36 @@ if ($v === 'items') {
     foreach ($table as $r) $b .= '<tr>' . implode('', array_map(fn($x, $j) => '<td class="' . ($j >= 4 ? 'num' : ($j === 0 ? 'wrap' : '')) . '">' . h($x) . '</td>', $r, array_keys($r))) . '</tr>';
     if (!$table) $b .= '<tr><td colspan="9" class="mut">まだ記録がありません。</td></tr>';
     page('文別の成績', $b . '</table></div>');
+}
+
+if ($v === 'accounts') {
+    $qs = s($_GET['q'] ?? '', 100);
+    $wq = $qs !== '' ? ' WHERE a.`email` LIKE ' . $pdo->quote('%' . $qs . '%') : '';
+    $rows = $q('SELECT a.`id`, a.`email`, a.`created_at`, a.`last_login_at`, a.`note` AS anote, e.`plan`, e.`until`, e.`source`, e.`status`, e.`updated_at`, e.`note`,
+        (SELECT COUNT(*) FROM `sessions` s WHERE s.`account_id` = a.`id` AND s.`revoked_at` IS NULL AND s.`expires_at` > NOW()) AS live_sessions
+        FROM `accounts` a LEFT JOIN `entitlements` e ON e.`account_id` = a.`id` AND e.`app_id` = ' . $pdo->quote(APP_ID) . $wq . ' ORDER BY a.`created_at` DESC LIMIT 300');
+    $head = ['メールアドレス', '登録', '最終ログイン', 'プラン', '有効期限', '出どころ', 'ログイン中の端末', 'メモ'];
+    $table = [];
+    foreach ($rows as $r) $table[] = [$r['email'], substr((string)$r['created_at'], 0, 10), dt($r['last_login_at']), plan_label((string)($r['plan'] ?? 'free')) . (plan_is_pro($r) ? '' : (($r['plan'] ?? 'free') !== 'free' ? '（期限切れ）' : '')), $r['until'] ?: '—', $r['source'] ?: '', (int)$r['live_sessions'], $r['note'] ?: ''];
+    if ($csv) csv_out('アカウント', $head, $table);
+    $tot = $q('SELECT COUNT(*) c FROM `accounts`')[0]['c'];
+    $pro = $q('SELECT COUNT(*) c FROM `entitlements` WHERE `app_id` = ? AND `status` = \'active\' AND `plan` IN (\'month\',\'year\',\'gift\',\'tester\') AND (`until` IS NULL OR `until` >= CURDATE())', [APP_ID])[0]['c'];
+    $b = '<h1>アカウント</h1>' . $deletedNote . (isset($_GET['saved']) ? '<p class="small ok">プランを保存しました。</p>' : '') . (isset($_GET['revoked']) ? '<p class="small ok">ログインを解除しました（' . (int)$_GET['revoked'] . ' 端末）。</p>' : '');
+    $b .= '<div class="card kpi"><div><span class="mut small">アカウント数</span><b>' . (int)$tot . '</b></div><div><span class="mut small">有料相当（有効）</span><b>' . (int)$pro . '</b></div></div>';
+    $b .= '<div class="card"><form class="row" method="get"><input type="hidden" name="v" value="accounts"><input type="text" name="q" value="' . h($qs) . '" placeholder="メールアドレスで検索"><button type="submit">検索</button><a class="btn ghost" style="margin-left:auto" href="?v=accounts&csv=1">CSV</a></form>';
+    $b .= '<p class="small mut">メールのリンクでログインした人の一覧。「プラン」はこのアプリでの有料相当の扱い（month／year＝サブスク、gift＝無料で付与、tester＝テスター、free＝無料）。決済連携ができるまでは、ここで手動で付与する。有効期限が空ならずっと有効。</p>';
+    $b .= '<table><tr>' . implode('', array_map(fn($x) => '<th>' . h($x) . '</th>', $head)) . '<th>操作</th></tr>';
+    foreach ($rows as $i => $r) {
+        $aid = (int)$r['id'];
+        $form = '<form method="post" class="row" style="gap:6px;flex-wrap:nowrap"><input type="hidden" name="setplan" value="1"><input type="hidden" name="id" value="' . $aid . '"><input type="hidden" name="t" value="' . h($csrf) . '"><input type="hidden" name="q" value="' . h($qs) . '">'
+            . '<select name="plan">' . implode('', array_map(fn($p) => '<option value="' . $p . '"' . (($r['plan'] ?? 'free') === $p ? ' selected' : '') . '>' . h(plan_label($p)) . '</option>', ['free', 'month', 'year', 'gift', 'tester'])) . '</select>'
+            . '<input type="date" name="until" value="' . h($r['until'] ?: '') . '" title="有効期限（空＝無期限）"><input type="text" name="note" value="' . h($r['note'] ?: '') . '" placeholder="メモ" style="width:120px"><button type="submit">保存</button></form>'
+            . ' ' . del_form('sessions', (string)$aid, 'ログイン解除', $r['email'] . ' のログインを全端末で解除します。よろしいですか？', '<input type="hidden" name="q" value="' . h($qs) . '">')
+            . ' ' . del_form('account', (string)$aid, '削除', $r['email'] . ' のアカウント・プラン・ログインを削除します（利用ログやランキングの記録は残ります）。元に戻せません。よろしいですか？');
+        $b .= '<tr>' . implode('', array_map(fn($x, $j) => '<td class="' . ($j === 6 ? 'num' : '') . '">' . h($x) . '</td>', $table[$i], array_keys($table[$i]))) . '<td>' . $form . '</td></tr>';
+    }
+    if (!$rows) $b .= '<tr><td colspan="9" class="mut">まだアカウントはありません（アプリの設定 →「アカウント」からメールでログインすると、ここに載ります）。</td></tr>';
+    page('アカウント', $b . '</table></div>');
 }
 
 page('不明', '<div class="card">そのページはありません。</div>');
