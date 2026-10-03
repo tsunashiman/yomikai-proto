@@ -1,5 +1,5 @@
 <?php
-/* 論理的読解タイムアタック：サーバー側 API の共通部分（さくらのレンタルサーバ・PHP 8.2・MySQL 8.0）
+/* まじめに速読トレ（旧称 論理的読解タイムアタック）：サーバー側 API の共通部分（さくらのレンタルサーバ・PHP 8.2・MySQL 8.0）
    - 接続先などの秘密は公開領域の外 /home/tsunashiman/secrets/db.json にある（GitHub Actions の deploy.yml が Secrets から書き出す）
    - テーブルは最初のアクセス時に自動で作る（migrate）。全テーブルに app_id を持たせ、ほかのアプリと同じ DB を共用できるようにしてある
    - 返事はすべて JSON。file:// や別ホストから開いた版（単体 HTML・アーティファクト・旧住所）からも送れるよう CORS は * */
@@ -318,7 +318,7 @@ function send_mail(string $to, string $subject, string $body): bool
     try { if ((cfg()['mail_mode'] ?? '') === 'log') { file_put_contents(dirname(SECRETS_FILE) . '/mail.log', "=== " . now3() . " to: $to\nsubject: $subject\n$body\n", FILE_APPEND); return true; } } catch (Throwable $e) { /* 通常送信へ */ }
     mb_language('ja'); mb_internal_encoding('UTF-8');
     $from = mail_from();
-    $headers = 'From: ' . mb_encode_mimeheader('論理的読解タイムアタック', 'UTF-8') . ' <' . $from . ">\r\n" . 'Reply-To: ' . mail_reply() . "\r\n" . 'Content-Type: text/plain; charset=UTF-8' . "\r\n" . 'Content-Transfer-Encoding: 8bit' . "\r\n" . 'X-Mailer: lrta' . "\r\n";
+    $headers = 'From: ' . mb_encode_mimeheader('まじめに速読トレ', 'UTF-8') . ' <' . $from . ">\r\n" . 'Reply-To: ' . mail_reply() . "\r\n" . 'Content-Type: text/plain; charset=UTF-8' . "\r\n" . 'Content-Transfer-Encoding: 8bit' . "\r\n" . 'X-Mailer: lrta' . "\r\n";
     try { return @mb_send_mail($to, $subject, $body, $headers, '-f ' . $from); } catch (Throwable $e) { return false; }
 }
 

@@ -31,13 +31,13 @@ if ($action === 'request') {
     $pdo->prepare('INSERT INTO `login_tokens` (`app_id`, `email_norm`, `token_hash`, `did`, `created_at`, `expires_at`, `ip_hash`) VALUES (?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 20 MINUTE), ?)')
         ->execute([APP_ID, $en, hash('sha256', $tok), $did, ip_hash()]);
     $link = app_url() . '?login=' . $tok;
-    $body = "論理的読解タイムアタック（Tsunashiman）です。\n\n"
+    $body = "まじめに速読トレ（Tsunashiman）です。\n\n"
         . "次のリンクを開くと、このメールアドレスでログインします（20 分以内・1 回だけ有効）。\n\n"
         . $link . "\n\n"
         . "・ログインしたい端末（スマホ／PC）でこのリンクを開いてください。別の端末で開くと、その端末がログインします。\n"
         . "・心当たりがない場合は、このメールを無視してください（何も起こりません）。\n\n"
         . "— Tsunashiman（ツナシマン）\n" . mail_reply() . "\n";
-    $sent = send_mail($email, '【論理的読解タイムアタック】ログイン用のリンク', $body);
+    $sent = send_mail($email, '【まじめに速読トレ】ログイン用のリンク', $body);
     if (!$sent) out(['ok' => false, 'error' => 'mail'], 500);
     out(['ok' => true, 'sent' => true]);
 }
