@@ -17,6 +17,9 @@
   python3 tools/stock_daily.py review <日付>                    … 他社AI確認用ファイル（stock/review/<日付>_他社AI確認用.md と latest.md）を作る
   python3 tools/stock_daily.py control min <版番号|->             … その版より古い版をすべて止める（- で解除）。テスターに配ったファイル版も止まるので注意
   python3 tools/stock_daily.py control tester-revoke <ID>         … そのテスターコード（ID）を無効にする（漏れたコードだけ止める。アプリは通常版に戻る）
+  python3 tools/stock_daily.py control test-end <正式版のURL> [android=<URL>] [ios=<URL>] [message=<一言>]
+                                                                  … 正式版の公開後に実行。試作版・テスト版はすべて「テスト版アプリは終了しました。正式版はこちらになります。」と
+                                                                    止まり、正式版の入手先へのリンクだけを出す（test-end off で取り消し）
   python3 tools/stock_daily.py control tester-unrevoke <ID>
   python3 tools/stock_daily.py control extend <版番号> <YYYY-MM-DD> … その版の有効期限を延ばす
   python3 tools/stock_daily.py control notice "<文>"              … アプリのホームに出すお知らせ（"" で消す）
@@ -637,7 +640,7 @@ def cmd_daily(date, path):
 
 
 def load_control():
-    base = {'updated': '', 'minBuild': '', 'revoked': [], 'revokedTesters': [], 'extend': {}, 'notice': ''}
+    base = {'updated': '', 'minBuild': '', 'revoked': [], 'revokedTesters': [], 'extend': {}, 'notice': '', 'testEnd': {'ended': False, 'url': '', 'android': '', 'ios': '', 'message': ''}}
     if os.path.exists(CONTROL):
         try:
             base.update(load_json(CONTROL))
@@ -661,6 +664,8 @@ def cmd_control(args):
         print('  revokedTesters（無効にしたテスターID）: %s' % (', '.join(c.get('revokedTesters') or []) or 'なし'))
         print('  extend（期限の延長）: %s' % (', '.join('%s→%s' % kv for kv in sorted((c.get('extend') or {}).items())) or 'なし'))
         print('  notice（お知らせ）: %s' % (c.get('notice') or 'なし'))
+        te = c.get('testEnd') or {}
+        print('  testEnd（テスト版の終了）: %s' % ('終了（正式版: %s%s%s）' % (te.get('url') or '公式の住所', ' / Android: ' + te['android'] if te.get('android') else '', ' / iOS: ' + te['ios'] if te.get('ios') else '') if te.get('ended') else 'まだ（試作版・テスト版は動く）'))
         return 0
     sub = args[0]; rest = args[1:]
     if sub == 'revoke' and rest:
@@ -690,6 +695,18 @@ def cmd_control(args):
     if sub == 'notice':
         c['notice'] = rest[0] if rest else ''
         save_control(c); print('お知らせ: %s' % (c['notice'] or '（消しました）')); return 0
+    if sub == 'test-end':
+        # 正式版の公開後：test-end <正式版のURL> [android=<Play のURL>] [ios=<App Store のURL>] [message=<一言>]。test-end off で取り消し
+        if rest and rest[0] == 'off':
+            c['testEnd'] = {'ended': False, 'url': '', 'android': '', 'ios': '', 'message': ''}
+            save_control(c); print('テスト版の終了を取り消しました（試作版・テスト版はまた動きます）'); return 0
+        te = {'ended': True, 'url': rest[0] if rest and '=' not in rest[0] else '', 'android': '', 'ios': '', 'message': ''}
+        for a in rest:
+            if '=' in a:
+                k, v = a.split('=', 1)
+                if k in ('android', 'ios', 'message', 'url'): te[k] = v
+        c['testEnd'] = te
+        save_control(c); print('テスト版を終了にしました。試作版・テスト版は次の点呼で「テスト版アプリは終了しました。正式版はこちらになります。」と止まります（正式版: %s）' % (te['url'] or '公式の住所')); return 0
     print(__doc__); return 2
 
 
