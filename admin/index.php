@@ -263,7 +263,7 @@ if ($v === 'items') {
 if ($v === 'accounts') {
     $qs = s($_GET['q'] ?? '', 100);
     $wq = $qs !== '' ? ' WHERE a.`email` LIKE ' . $pdo->quote('%' . $qs . '%') : '';
-    $rows = $q('SELECT a.`id`, a.`email`, a.`created_at`, a.`last_login_at`, a.`note` AS anote, a.`payjp_customer`, e.`plan`, e.`until`, e.`source`, e.`ref`, e.`status`, e.`updated_at`, e.`note`, e.`period_end`, e.`canceled_at`, e.`tickets_granted`, e.`card_brand`, e.`card_last4`,
+    $rows = $q('SELECT a.`id`, a.`email`, a.`created_at`, a.`last_login_at`, a.`note` AS anote, a.`payjp_customer`, e.`plan`, e.`until`, e.`source`, e.`ref`, e.`status`, e.`updated_at`, e.`note`, e.`period_end`, e.`canceled_at`, e.`tickets_granted`, e.`card_brand`, e.`card_last4`, e.`amount`, e.`price_rev`,
         (SELECT COUNT(*) FROM `sessions` s WHERE s.`account_id` = a.`id` AND s.`revoked_at` IS NULL AND s.`expires_at` > NOW()) AS live_sessions
         FROM `accounts` a LEFT JOIN `entitlements` e ON e.`account_id` = a.`id` AND e.`app_id` = ' . $pdo->quote(APP_ID) . $wq . ' ORDER BY a.`created_at` DESC LIMIT 300');
     $head = ['メールアドレス', '登録', '最終ログイン', 'プラン', '有効期限', '出どころ', '決済（PAY.JP）', 'チケット累計', 'ログイン中の端末', 'メモ'];
@@ -271,7 +271,9 @@ if ($v === 'accounts') {
     foreach ($rows as $r) {
         $pay = '';
         if (($r['source'] ?? '') === 'payjp' && ($r['ref'] ?? '') !== '') {
+            $listAmt = (int)(PAY_PLANS[(string)($r['plan'] ?? '')]['amount'] ?? 0); $amt = (int)($r['amount'] ?? 0) ?: $listAmt;
             $pay = (($r['status'] ?? '') === 'active' ? (!empty($r['canceled_at']) ? '解約済み（期間末まで）' : '継続中') : (($r['status'] ?? '') === 'past_due' ? '支払い失敗で停止' : '終了'))
+                . ($amt > 0 ? '・' . number_format($amt) . ' 円' . ($listAmt > 0 && $amt < $listAmt ? '（加入時の料金で据え置き。いまの料金表は ' . number_format($listAmt) . ' 円）' : ($listAmt > 0 && $amt > $listAmt ? '（料金表より高い。値下げ後なら PAY.JP で新プランへ移す）' : '')) : '')
                 . ($r['period_end'] ? '・次回 ' . substr((string)$r['period_end'], 0, 10) : '') . ($r['card_last4'] !== '' ? '・' . $r['card_brand'] . ' ****' . $r['card_last4'] : '');
         } elseif (($r['payjp_customer'] ?? '') !== '') $pay = 'カード登録あり' . ($r['card_last4'] !== '' ? '（' . $r['card_brand'] . ' ****' . $r['card_last4'] . '）' : '');
         $table[] = [$r['email'], substr((string)$r['created_at'], 0, 10), dt($r['last_login_at']), plan_label((string)($r['plan'] ?? 'free')) . (plan_is_pro($r) ? '' : (($r['plan'] ?? 'free') !== 'free' ? '（期限切れ）' : '')), $r['until'] ?: '—', $r['source'] ?: '', $pay, (int)($r['tickets_granted'] ?? 0), (int)$r['live_sessions'], $r['note'] ?: ''];
@@ -308,9 +310,11 @@ if ($v === 'sales') {
     if ($csv) csv_out('売上', $head, $table);
     $sum = $q("SELECT COUNT(*) c, COALESCE(SUM(CASE WHEN `status` = 'paid' THEN `amount` ELSE 0 END), 0) total, COALESCE(SUM(CASE WHEN `status` = 'paid' AND `created_at` >= DATE_FORMAT(NOW(), '%Y-%m-01') THEN `amount` ELSE 0 END), 0) month_total FROM `payments` WHERE `app_id` = ? AND `livemode` = 1", [APP_ID])[0];
     $subs = $q("SELECT COUNT(*) c FROM `entitlements` WHERE `app_id` = ? AND `source` = 'payjp' AND `status` = 'active' AND `canceled_at` IS NULL AND (`until` IS NULL OR `until` >= CURDATE())", [APP_ID])[0]['c'];
+    /* 加入時の料金で据え置き中の人数（いまの料金表より安い金額で継続している定期課金） */
+    $gf = 0; foreach ($q("SELECT `plan`, `amount` FROM `entitlements` WHERE `app_id` = ? AND `source` = 'payjp' AND `status` = 'active' AND `canceled_at` IS NULL AND (`until` IS NULL OR `until` >= CURDATE())", [APP_ID]) as $x) { $la = (int)(PAY_PLANS[(string)$x['plan']]['amount'] ?? 0); if ((int)$x['amount'] > 0 && $la > 0 && (int)$x['amount'] < $la) $gf++; }
     $hooks = $q('SELECT `received_at`, `type`, `object_id`, `verified`, `handled` FROM `webhook_log` ORDER BY `id` DESC LIMIT 20');
-    $b = '<h1>売上（決済の記録）</h1><div class="card kpi"><div><span class="mut small">継続中のサブスク（PAY.JP）</span><b>' . (int)$subs . '</b></div><div><span class="mut small">本番の売上 今月（円）</span><b>' . number_format((int)$sum['month_total']) . '</b></div><div><span class="mut small">本番の売上 累計（円）</span><b>' . number_format((int)$sum['total']) . '</b></div><div><span class="mut small">決済の環境</span><b style="font-size:15px">' . h(payjp_cfg()['enabled'] ? payjp_cfg()['mode'] . (payjp_cfg()['mock'] ? '（模擬）' : '') : '未接続') . '</b></div></div>';
-    $b .= '<div class="card"><div class="row"><span class="small mut">サブスクの開始・更新・チケットの都度払いの記録（PAY.JP の管理画面の「売上」と突き合わせる。更新は、アプリの照合か Webhook が期間の更新に気づいた時点で記録される）。金額は税込。</span><a class="btn ghost" style="margin-left:auto" href="?v=sales&csv=1">CSV</a></div>';
+    $b = '<h1>売上（決済の記録）</h1><div class="card kpi"><div><span class="mut small">継続中のサブスク（PAY.JP）</span><b>' . (int)$subs . '</b></div><div><span class="mut small">うち加入時の料金で据え置き中</span><b>' . (int)$gf . '</b></div><div><span class="mut small">本番の売上 今月（円）</span><b>' . number_format((int)$sum['month_total']) . '</b></div><div><span class="mut small">本番の売上 累計（円）</span><b>' . number_format((int)$sum['total']) . '</b></div><div><span class="mut small">決済の環境</span><b style="font-size:15px">' . h(payjp_cfg()['enabled'] ? payjp_cfg()['mode'] . (payjp_cfg()['mock'] ? '（模擬）' : '') : '未接続') . '</b></div></div>';
+    $b .= '<div class="card"><div class="row"><span class="small mut">サブスクの開始・更新・チケットの都度払いの記録（PAY.JP の管理画面の「売上」と突き合わせる。更新は、アプリの照合か Webhook が期間の更新に気づいた時点で記録される）。金額は税込。いまの料金表は第 ' . PAY_PRICE_REV . ' 世代（月額 ' . number_format(PAY_PLANS['month']['amount']) . ' 円／年額 ' . number_format(PAY_PLANS['year']['amount']) . ' 円）。値上げしても継続中の人は加入時の金額のまま更新される（PAY.JP のプランが金額ごとに分かれているため）。</span><a class="btn ghost" style="margin-left:auto" href="?v=sales&csv=1">CSV</a></div>';
     $b .= '<table><tr>' . implode('', array_map(fn($x) => '<th>' . h($x) . '</th>', $head)) . '</tr>';
     foreach ($table as $row) $b .= '<tr>' . implode('', array_map(fn($x, $j) => '<td class="' . ($j === 4 ? 'num' : '') . '">' . h($x) . '</td>', $row, array_keys($row))) . '</tr>';
     if (!$table) $b .= '<tr><td colspan="10" class="mut">まだ決済の記録はありません。</td></tr>';
