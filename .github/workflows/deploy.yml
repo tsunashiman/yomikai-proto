@@ -1,7 +1,10 @@
 # さくらのレンタルサーバ（yomikai.tsunashiman.com）への自動反映
 # main に push されるたび（毎日の新作生成ルーティンの更新も含む）、このリポジトリの中身を
 # サーバーの /home/tsunashiman/www/yomikai/ に rsync で同期する。手動実行（Actions タブ → Run workflow）も可。
-# 必要な Secret：SAKURA_SSH_KEY（さくらに登録した公開鍵に対応する秘密鍵。OpenSSH 形式の全文）
+# 必要な Secret：
+#   SAKURA_SSH_KEY     さくらに登録した公開鍵に対応する秘密鍵（OpenSSH 形式の全文）
+#   SAKURA_DB_PASSWORD データベース tsunashiman_app のパスワード → サーバーの公開領域の外 /home/tsunashiman/secrets/db.json に書き出す
+#   ADMIN_KEY          管理ページ（/admin/）に入る合言葉（任意。無ければ管理ページは「準備中」のまま）
 name: さくらへ反映（yomikai.tsunashiman.com）
 
 on:
@@ -39,8 +42,36 @@ jobs:
             -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes" \
             ./ tsunashiman@tsunashiman.sakura.ne.jp:/home/tsunashiman/www/yomikai/
 
+      - name: データベースの接続設定を公開領域の外に置く（secrets/db.json）
+        env:
+          SAKURA_DB_PASSWORD: ${{ secrets.SAKURA_DB_PASSWORD }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+        run: |
+          if [ -z "$SAKURA_DB_PASSWORD" ]; then echo "Secret SAKURA_DB_PASSWORD が未設定のため、DB の設定ファイルは置きません（api/ は『準備中』と答えます）"; exit 0; fi
+          python3 - <<'PY' > "$RUNNER_TEMP/db.json"
+          import json, os
+          print(json.dumps({
+            "host": "mysql80.tsunashiman.sakura.ne.jp",
+            "db": "tsunashiman_app",
+            "users": ["tsunashiman_app", "tsunashiman"],
+            "pass": os.environ["SAKURA_DB_PASSWORD"],
+            "charset": "utf8mb4",
+            "admin_key": os.environ.get("ADMIN_KEY", "")
+          }, ensure_ascii=False))
+          PY
+          chmod 600 "$RUNNER_TEMP/db.json"
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes tsunashiman@tsunashiman.sakura.ne.jp 'mkdir -p ~/secrets && chmod 700 ~/secrets'
+          rsync -tz --chmod=F600 --rsync-path=/usr/local/bin/rsync \
+            -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes" \
+            "$RUNNER_TEMP/db.json" tsunashiman@tsunashiman.sakura.ne.jp:/home/tsunashiman/secrets/db.json
+          rm -f "$RUNNER_TEMP/db.json"
+          echo "secrets/db.json を更新しました（管理ページの合言葉：$([ -n "$ADMIN_KEY" ] && echo 設定あり || echo 未設定)）"
+
       - name: 反映の確認
         run: |
           sleep 3
           code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://yomikai.tsunashiman.com/sw.js || true)
-          echo "https://yomikai.tsunashiman.com/sw.js -> HTTP $code（DNS/SSL の反映前は失敗しても構いません）"
+          echo "https://yomikai.tsunashiman.com/sw.js -> HTTP $code"
+          echo "API の状態："
+          curl -s --max-time 20 https://yomikai.tsunashiman.com/api/health.php || echo "（api/health.php に届きません）"
+          echo
