@@ -1,0 +1,3 @@
+# tsunashiman.jp → tsunashiman.com へ転送（パスはそのまま引き継ぐ）
+RewriteEngine On
+RewriteRule ^(.*)$ https://tsunashiman.com/$1 [R=301,L]
