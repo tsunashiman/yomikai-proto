@@ -36,3 +36,6 @@ footer{border-top:1px solid var(--line);margin-top:30px}
 footer .in{max-width:var(--maxw);margin:0 auto;padding:22px 20px;display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px;color:var(--mut)}
 footer a{color:var(--mut)}footer .copy{margin-left:auto}
 .price{display:flex;gap:14px;flex-wrap:wrap}.price .card{flex:1 1 220px}.price b.big{font-size:26px}
+.tblwrap{overflow-x:auto;margin:14px 0}table.cmp{border-collapse:collapse;width:100%;min-width:560px;font-size:14px;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+table.cmp th,table.cmp td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}table.cmp thead th{background:color-mix(in srgb,var(--bg) 60%,var(--card));font-weight:700}table.cmp tbody th{width:27%;font-weight:600}
+table.cmp .pro{background:color-mix(in srgb,var(--blue) 8%,var(--card))}table.cmp tr:last-child td,table.cmp tr:last-child th{border-bottom:0}
