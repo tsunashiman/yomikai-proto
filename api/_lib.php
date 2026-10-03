@@ -68,7 +68,7 @@ function ip_hash(): string
     return substr(hash('sha256', ($_SERVER['REMOTE_ADDR'] ?? '') . '|' . secret_salt('ip')), 0, 16);
 }
 
-/* DB 接続。users に複数あれば順に試す（さくらは DB 名＝ユーザー名の方式とアカウント名の方式があるため） */
+/* DB 接続。hosts（別名と実ホスト名）× users（さくらの MySQL 8.0 は DB 名＝ユーザー名。アカウント名の管理用ユーザーも予備で）を順に試す */
 function db(): PDO
 {
     static $pdo = null;
@@ -76,25 +76,30 @@ function db(): PDO
     $c = cfg();
     $users = [];
     foreach (($c['users'] ?? [$c['user'] ?? $c['db']]) as $u) if (is_string($u) && $u !== '' && !in_array($u, $users, true)) $users[] = $u;
+    $hosts = [];
+    foreach (($c['hosts'] ?? [$c['host']]) as $h) if (is_string($h) && $h !== '' && !in_array($h, $hosts, true)) $hosts[] = $h;
     $last = null;
-    foreach ($users as $u) {
-        try {
-            $p = new PDO('mysql:host=' . $c['host'] . (!empty($c['port']) ? ';port=' . (int)$c['port'] : '') . ';dbname=' . $c['db'] . ';charset=utf8mb4', $u, (string)($c['pass'] ?? ''),
-                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC, PDO::ATTR_EMULATE_PREPARES => false, PDO::ATTR_TIMEOUT => 5]);
-            $p->exec("SET time_zone = '+09:00'");
-            $GLOBALS['__db_user'] = $u;
-            migrate($p);
-            $pdo = $p;
-            return $pdo;
-        } catch (PDOException $e) {
-            $last = $e;
-            if (strpos($e->getMessage(), '1045') === false) break; /* パスワード違い（1045）以外は次のユーザーを試しても無駄 */
+    foreach ($hosts as $h) {
+        foreach ($users as $u) {
+            try {
+                $p = new PDO('mysql:host=' . $h . (!empty($c['port']) ? ';port=' . (int)$c['port'] : '') . ';dbname=' . $c['db'] . ';charset=utf8mb4', $u, (string)($c['pass'] ?? ''),
+                    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC, PDO::ATTR_EMULATE_PREPARES => false, PDO::ATTR_TIMEOUT => 5]);
+                $p->exec("SET time_zone = '+09:00'");
+                $GLOBALS['__db_user'] = $u; $GLOBALS['__db_host'] = $h;
+                migrate($p);
+                $pdo = $p;
+                return $pdo;
+            } catch (PDOException $e) {
+                $last = $e;
+                if (strpos($e->getMessage(), '1045') === false) break; /* パスワード違い（1045）以外は、このホストで次のユーザーを試しても無駄 → 次のホストへ */
+            }
         }
     }
     throw $last ?? new RuntimeException('db');
 }
 
 function db_user_label(): string { return (string)($GLOBALS['__db_user'] ?? ''); }
+function db_host_label(): string { return (string)($GLOBALS['__db_host'] ?? ''); }
 
 /* ---- テーブル（初回に自動作成。版を上げるときは SCHEMA_VERSION を上げ、下に ALTER を足す） ---- */
 function ddl_v1(): array

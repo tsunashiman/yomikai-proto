@@ -9,6 +9,7 @@ try {
     $pdo = db();
     $o['db'] = 'ok';
     $o['dbUser'] = db_user_label();
+    $o['dbHost'] = db_host_label();
     $o['mysql'] = (string)$pdo->query('SELECT VERSION()')->fetchColumn();
     $cnt = [];
     foreach (['usage_events', 'feedback', 'daily_results'] as $t) $cnt[$t] = (int)$pdo->query('SELECT COUNT(*) FROM `' . $t . '` WHERE `app_id` = ' . $pdo->quote(APP_ID))->fetchColumn();
