@@ -6,7 +6,7 @@
 declare(strict_types=1);
 
 const APP_ID = 'yomikai';
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const SECRETS_FILE = '/home/tsunashiman/secrets/db.json';
 
 date_default_timezone_set('Asia/Tokyo');
@@ -266,6 +266,53 @@ function ddl_v2(): array
     ];
 }
 
+/* v3（v60）：決済（PAY.JP）。accounts に顧客 ID、entitlements に定期課金の状態とチケットの累計、payments（売上）と webhook_log */
+function ddl_v3(): array
+{
+    return [
+        "ALTER TABLE `accounts` ADD COLUMN `payjp_customer` VARCHAR(100) NOT NULL DEFAULT ''",
+        "ALTER TABLE `entitlements` ADD COLUMN `period_end` DATETIME NULL",
+        "ALTER TABLE `entitlements` ADD COLUMN `canceled_at` DATETIME NULL",
+        "ALTER TABLE `entitlements` ADD COLUMN `synced_at` DATETIME NULL",
+        "ALTER TABLE `entitlements` ADD COLUMN `tickets_granted` INT NOT NULL DEFAULT 0",
+        "ALTER TABLE `entitlements` ADD COLUMN `card_brand` VARCHAR(24) NOT NULL DEFAULT ''",
+        "ALTER TABLE `entitlements` ADD COLUMN `card_last4` VARCHAR(4) NOT NULL DEFAULT ''",
+        "CREATE TABLE IF NOT EXISTS `payments` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            `app_id` VARCHAR(32) NOT NULL,
+            `account_id` BIGINT UNSIGNED NOT NULL,
+            `kind` VARCHAR(16) NOT NULL,
+            `plan` VARCHAR(24) NOT NULL DEFAULT '',
+            `amount` INT NOT NULL DEFAULT 0,
+            `status` VARCHAR(16) NOT NULL DEFAULT 'paid',
+            `payjp_charge` VARCHAR(64) NOT NULL DEFAULT '',
+            `payjp_sub` VARCHAR(64) NOT NULL DEFAULT '',
+            `livemode` TINYINT NOT NULL DEFAULT 0,
+            `created_at` DATETIME NOT NULL,
+            `note` VARCHAR(200) NOT NULL DEFAULT '',
+            KEY `ix_acc` (`app_id`, `account_id`, `created_at`),
+            KEY `ix_charge` (`payjp_charge`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        "CREATE TABLE IF NOT EXISTS `webhook_log` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            `received_at` DATETIME(3) NOT NULL,
+            `event_id` VARCHAR(64) NOT NULL DEFAULT '',
+            `type` VARCHAR(48) NOT NULL DEFAULT '',
+            `object_id` VARCHAR(64) NOT NULL DEFAULT '',
+            `verified` TINYINT NOT NULL DEFAULT 0,
+            `handled` VARCHAR(40) NOT NULL DEFAULT '',
+            `body` MEDIUMTEXT NULL,
+            KEY `ix_evt` (`event_id`),
+            KEY `ix_at` (`received_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ];
+}
+function exec_ignore(PDO $pdo, string $sql, array $ignoreCodes): void
+{
+    try { $pdo->exec($sql); }
+    catch (PDOException $e) { $m = $e->getMessage(); foreach ($ignoreCodes as $c) if (strpos($m, $c) !== false) return; throw $e; }
+}
+
 function migrate(PDO $pdo): void
 {
     $v = 0;
@@ -274,6 +321,7 @@ function migrate(PDO $pdo): void
     if ($v >= SCHEMA_VERSION) return;
     if ($v < 1) foreach (ddl_v1() as $sql) $pdo->exec($sql);
     if ($v < 2) foreach (ddl_v2() as $sql) $pdo->exec($sql);
+    if ($v < 3) foreach (ddl_v3() as $sql) exec_ignore($pdo, $sql, ['1060', '1061', '1050']); /* 列・索引・表が既にある（1060／1061／1050）は無視 */
     $pdo->prepare('INSERT INTO `schema_version` (`id`, `v`, `at`) VALUES (1, ?, NOW()) ON DUPLICATE KEY UPDATE `v` = ?, `at` = NOW()')->execute([SCHEMA_VERSION, SCHEMA_VERSION]);
 }
 
@@ -281,7 +329,7 @@ function migrate(PDO $pdo): void
 const PAID_PLANS = ['month', 'year', 'gift', 'tester'];
 function plan_is_pro(?array $ent): bool
 {
-    if (!$ent || ($ent['status'] ?? 'active') !== 'active') return false;
+    if (!$ent || ($ent['status'] ?? 'active') !== 'active') return false; /* past_due（支払い失敗で停止）・ended（削除済み）は無効 */
     if (!in_array((string)($ent['plan'] ?? 'free'), PAID_PLANS, true)) return false;
     $until = $ent['until'] ?? null;
     return $until === null || $until === '' || (string)$until >= today();
@@ -293,11 +341,16 @@ function plan_label(string $plan): string
 /* アカウントの要約（アプリに返す形）：email・plan・until・pro */
 function account_info(PDO $pdo, int $accountId): ?array
 {
-    $st = $pdo->prepare('SELECT `id`, `email`, `created_at`, `last_login_at` FROM `accounts` WHERE `id` = ?'); $st->execute([$accountId]);
+    $st = $pdo->prepare('SELECT `id`, `email`, `created_at`, `last_login_at`, `payjp_customer` FROM `accounts` WHERE `id` = ?'); $st->execute([$accountId]);
     $a = $st->fetch(); if (!$a) return null;
-    $st = $pdo->prepare('SELECT `plan`, `until`, `source`, `status`, `updated_at` FROM `entitlements` WHERE `account_id` = ? AND `app_id` = ?'); $st->execute([$accountId, APP_ID]);
+    $st = $pdo->prepare('SELECT `plan`, `until`, `source`, `ref`, `status`, `updated_at`, `period_end`, `canceled_at`, `tickets_granted`, `card_brand`, `card_last4` FROM `entitlements` WHERE `account_id` = ? AND `app_id` = ?'); $st->execute([$accountId, APP_ID]);
     $e = $st->fetch() ?: null;
-    return ['email' => $a['email'], 'since' => substr((string)$a['created_at'], 0, 10), 'plan' => $e ? $e['plan'] : 'free', 'planLabel' => plan_label($e ? $e['plan'] : 'free'), 'until' => $e && $e['until'] ? (string)$e['until'] : null, 'source' => $e ? $e['source'] : '', 'pro' => plan_is_pro($e)];
+    $sub = null;
+    if ($e && $e['source'] === 'payjp' && $e['ref'] !== '') {
+        $sub = ['status' => $e['status'], 'periodEnd' => $e['period_end'] ? substr((string)$e['period_end'], 0, 16) : null, 'canceled' => !empty($e['canceled_at']), 'card' => trim(($e['card_brand'] ?? '') . ' ' . ($e['card_last4'] !== '' ? '****' . $e['card_last4'] : ''))];
+    }
+    return ['email' => $a['email'], 'since' => substr((string)$a['created_at'], 0, 10), 'plan' => $e ? $e['plan'] : 'free', 'planLabel' => plan_label($e ? $e['plan'] : 'free'), 'until' => $e && $e['until'] ? (string)$e['until'] : null, 'source' => $e ? $e['source'] : '', 'pro' => plan_is_pro($e),
+        'sub' => $sub, 'ticketsGranted' => $e ? (int)$e['tickets_granted'] : 0, 'hasCard' => (string)($a['payjp_customer'] ?? '') !== ''];
 }
 /* セッションの照合：有効なら account_id、無ければ 0 */
 function session_account(PDO $pdo, string $rawToken): int
@@ -379,4 +432,187 @@ function err_kind(Throwable $e): string
     if (strpos($m, '2002') !== false || stripos($m, 'timed out') !== false) return 'connect';
     if (strpos($m, '1044') !== false || strpos($m, '1049') !== false) return 'database';
     return 'sql:' . (preg_match('/SQLSTATE\[(\w+)\]/', $m, $mm) ? $mm[1] : 'unknown');
+}
+
+/* ======================= 決済（PAY.JP・v60） =======================
+   秘密鍵・公開鍵は secrets/db.json（payjp_secret／payjp_public／payjp_webhook_token。deploy.yml が GitHub の Secrets から書き出す）。
+   秘密鍵が無ければ決済機能は無効（アプリは従来どおり模擬の購入画面のまま）。
+   価格はここ（サーバー側）だけで決める。アプリから送られた金額は使わない。
+   db.json に "payjp_mode": "mock" があると PAY.JP に通信せず、secrets/payjp_mock.json に状態を持つ偽物で動く（手元のテスト用）。 */
+const PAY_PLANS = ['month' => ['amount' => 500, 'interval' => 'month', 'name' => 'まじめに速読トレ サブスク（月額）'], 'year' => ['amount' => 5000, 'interval' => 'year', 'name' => 'まじめに速読トレ サブスク（年額）']];
+const PAY_TICKETS = ['t5' => ['amount' => 500, 'n' => 5, 'name' => 'チケット 5 枚'], 't10' => ['amount' => 900, 'n' => 10, 'name' => 'チケット 10 枚']];
+const PAY_GRACE_DAYS = 2; /* 更新の遅れ（PAY.JP は current_period_end ちょうどには更新しない）を吸収するための猶予 */
+
+function payjp_cfg(): array
+{
+    try { $c = cfg(); } catch (Throwable $e) { $c = []; }
+    $sk = trim((string)($c['payjp_secret'] ?? '')); $pk = trim((string)($c['payjp_public'] ?? ''));
+    $mock = (($c['payjp_mode'] ?? '') === 'mock');
+    return ['secret' => $sk, 'public' => $pk, 'webhook_token' => trim((string)($c['payjp_webhook_token'] ?? '')), 'mock' => $mock,
+        'enabled' => $mock || ($sk !== '' && $pk !== ''), 'mode' => $mock ? 'test' : (str_starts_with($sk, 'sk_live_') ? 'live' : 'test')];
+}
+function payjp_enabled(): bool { return payjp_cfg()['enabled']; }
+
+/* PAY.JP への問い合わせ。返事は ['ok' => bool, 'status' => int, 'data' => array（成功ならオブジェクト、失敗なら error の中身）] */
+function payjp_request(string $method, string $path, array $params = []): array
+{
+    $pc = payjp_cfg();
+    if ($pc['mock']) return payjp_mock($method, $path, $params);
+    if ($pc['secret'] === '') return ['ok' => false, 'status' => 0, 'data' => ['type' => 'config', 'code' => 'no_key', 'message' => 'PAY.JP の鍵が未設定']];
+    $url = 'https://api.pay.jp/v1/' . ltrim($path, '/');
+    $body = http_build_query($params, '', '&');
+    if ($method === 'GET' && $body !== '') { $url .= '?' . $body; $body = ''; }
+    $resp = false; $code = 0;
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 25, CURLOPT_CONNECTTIMEOUT => 10, CURLOPT_USERPWD => $pc['secret'] . ':', CURLOPT_CUSTOMREQUEST => $method,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/x-www-form-urlencoded', 'User-Agent: yomikai/1.0'], CURLOPT_SSL_VERIFYPEER => true]);
+        if ($method !== 'GET') curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        $resp = curl_exec($ch); $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        if ($resp === false) { $err = curl_error($ch); curl_close($ch); return ['ok' => false, 'status' => 0, 'data' => ['type' => 'network', 'code' => 'curl', 'message' => $err]]; }
+        curl_close($ch);
+    } else {
+        $ctx = stream_context_create(['http' => ['method' => $method, 'header' => "Authorization: Basic " . base64_encode($pc['secret'] . ':') . "\r\nContent-Type: application/x-www-form-urlencoded\r\nUser-Agent: yomikai/1.0\r\n", 'content' => $body, 'timeout' => 25, 'ignore_errors' => true]]);
+        $resp = @file_get_contents($url, false, $ctx);
+        if ($resp === false) return ['ok' => false, 'status' => 0, 'data' => ['type' => 'network', 'code' => 'stream', 'message' => 'connect failed']];
+        foreach (($http_response_header ?? []) as $h) if (preg_match('#^HTTP/\S+\s+(\d+)#', $h, $m)) $code = (int)$m[1];
+    }
+    $j = json_decode((string)$resp, true);
+    if (!is_array($j)) return ['ok' => false, 'status' => $code, 'data' => ['type' => 'bad_response', 'code' => 'json', 'message' => 'HTTP ' . $code]];
+    if (isset($j['error'])) return ['ok' => false, 'status' => $code ?: (int)($j['error']['status'] ?? 400), 'data' => $j['error']];
+    return ['ok' => $code >= 200 && $code < 300, 'status' => $code, 'data' => $j];
+}
+/* 利用者向けの短い説明（PAY.JP の error.code → 日本語） */
+function payjp_error_text(array $err): string
+{
+    $code = (string)($err['code'] ?? ''); $type = (string)($err['type'] ?? '');
+    $map = ['card_declined' => 'カード会社に支払いを断られました。別のカードをお試しください。', 'expired_card' => 'カードの有効期限が切れています。', 'incorrect_card_data' => 'カード情報のいずれかが誤っています。',
+        'invalid_number' => 'カード番号が正しくありません。', 'invalid_cvc' => 'セキュリティコードが正しくありません。', 'invalid_expiry_month' => '有効期限（月）が正しくありません。', 'invalid_expiry_year' => '有効期限（年）が正しくありません。',
+        'card_flagged' => 'このカードは一時的に使えません。しばらくしてからお試しください。', 'processing_error' => '決済ネットワークでエラーが起きました。しばらくしてからお試しください。', 'token_already_used' => 'カード情報を入れ直してください（入力が古くなりました）。',
+        'already_subscribed' => 'このアカウントはすでに登録済みです。', 'test_card_on_livemode' => 'テスト用のカード番号は使えません。', 'over_capacity' => '混み合っています。少し待ってからお試しください。', 'no_key' => '決済の設定がまだです。'];
+    if (isset($map[$code])) return $map[$code];
+    if ($type === 'card_error') return 'カードでの支払いができませんでした。カード情報をご確認ください。';
+    if ($type === 'network') return '決済サービスにつながりませんでした。しばらくしてからお試しください。';
+    return '決済でエラーが起きました（' . ($code !== '' ? $code : $type) . '）。';
+}
+/* プランは PAY.JP 側にも作る（ID に金額を含めるので、価格を変えたら新しいプランができる） */
+function payjp_plan_id(string $plan): string { return 'yomikai_' . $plan . '_' . PAY_PLANS[$plan]['amount']; }
+function payjp_ensure_plan(string $plan): array
+{
+    $id = payjp_plan_id($plan); $def = PAY_PLANS[$plan];
+    $r = payjp_request('GET', 'plans/' . $id);
+    if ($r['ok']) return $r;
+    $r = payjp_request('POST', 'plans', ['id' => $id, 'amount' => $def['amount'], 'currency' => 'jpy', 'interval' => $def['interval'], 'name' => $def['name']]);
+    if (!$r['ok'] && (($r['data']['code'] ?? '') === 'already_exist_id')) return payjp_request('GET', 'plans/' . $id);
+    return $r;
+}
+function ts_to_jst(?int $ts): ?string { return $ts ? (new DateTimeImmutable('@' . $ts))->setTimezone(new DateTimeZone('Asia/Tokyo'))->format('Y-m-d H:i:s') : null; }
+function date_add_days(string $ymd, int $days): string { return (new DateTimeImmutable($ymd . ' 00:00:00', new DateTimeZone('Asia/Tokyo')))->modify(($days >= 0 ? '+' : '') . $days . ' days')->format('Y-m-d'); }
+
+/* PAY.JP の定期課金オブジェクト → entitlements の行に反映（作成・照合・Webhook のすべてがここを通る） */
+function payjp_apply_subscription(PDO $pdo, int $aid, array $sub, ?string $planKey = null): void
+{
+    $status = (string)($sub['status'] ?? '');
+    $periodEnd = ts_to_jst(isset($sub['current_period_end']) ? (int)$sub['current_period_end'] : null);
+    $endDate = $periodEnd ? substr($periodEnd, 0, 10) : today();
+    $canceled = !empty($sub['canceled_at']) || $status === 'canceled';
+    if ($planKey === null) { $pid = (string)($sub['plan']['id'] ?? ''); foreach (PAY_PLANS as $k => $d) if (str_starts_with($pid, 'yomikai_' . $k . '_')) $planKey = $k; }
+    $planKey = $planKey ?: 'month';
+    if ($status === 'active' || $status === 'trial') { $st = 'active'; $until = date_add_days($endDate, PAY_GRACE_DAYS); }
+    elseif ($status === 'canceled') { $st = 'active'; $until = $endDate; } /* 期間末まで使える */
+    elseif ($status === 'paused') { $st = 'past_due'; $until = $endDate; } /* 支払い失敗：止める（カードを更新して再開） */
+    else { $st = 'ended'; $until = date_add_days(today(), -1); }
+    $pdo->prepare('INSERT INTO `entitlements` (`account_id`, `app_id`, `plan`, `until`, `source`, `ref`, `status`, `updated_at`, `period_end`, `canceled_at`, `synced_at`, `note`)
+        VALUES (?, ?, ?, ?, \'payjp\', ?, ?, NOW(), ?, ?, NOW(), \'\')
+        ON DUPLICATE KEY UPDATE `plan` = VALUES(`plan`), `until` = VALUES(`until`), `source` = \'payjp\', `ref` = VALUES(`ref`), `status` = VALUES(`status`), `updated_at` = NOW(), `period_end` = VALUES(`period_end`), `canceled_at` = VALUES(`canceled_at`), `synced_at` = NOW()')
+        ->execute([$aid, APP_ID, $planKey, $until, (string)($sub['id'] ?? ''), $st, $periodEnd, $canceled ? (ts_to_jst(isset($sub['canceled_at']) ? (int)$sub['canceled_at'] : null) ?? now3()) : null]);
+}
+function payjp_record_payment(PDO $pdo, int $aid, string $kind, string $plan, int $amount, string $charge, string $sub, string $status = 'paid', string $note = ''): void
+{
+    if ($charge !== '') { $st = $pdo->prepare('SELECT COUNT(*) FROM `payments` WHERE `payjp_charge` = ?'); $st->execute([$charge]); if ((int)$st->fetchColumn() > 0) return; }
+    $pdo->prepare('INSERT INTO `payments` (`app_id`, `account_id`, `kind`, `plan`, `amount`, `status`, `payjp_charge`, `payjp_sub`, `livemode`, `created_at`, `note`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)')
+        ->execute([APP_ID, $aid, $kind, $plan, $amount, $status, $charge, $sub, payjp_cfg()['mode'] === 'live' ? 1 : 0, $note]);
+}
+/* 定期課金の状態を PAY.JP に問い合わせて反映する。force でなければ 6 時間に 1 回、または期限が近いときだけ */
+function payjp_sync(PDO $pdo, int $aid, bool $force = false): ?array
+{
+    if (!payjp_enabled()) return null;
+    $st = $pdo->prepare('SELECT * FROM `entitlements` WHERE `account_id` = ? AND `app_id` = ?'); $st->execute([$aid, APP_ID]);
+    $e = $st->fetch(); if (!$e || $e['source'] !== 'payjp' || $e['ref'] === '') return null;
+    if (!$force) {
+        $fresh = $e['synced_at'] && (time() - strtotime((string)$e['synced_at'])) < 6 * 3600;
+        $near = $e['until'] === null || (string)$e['until'] <= date_add_days(today(), 1);
+        if ($fresh && !$near) return $e;
+        if ($fresh && $near && $e['synced_at'] && (time() - strtotime((string)$e['synced_at'])) < 20 * 60) return $e; /* 期限が近くても 20 分に 1 回まで */
+    }
+    $r = payjp_request('GET', 'subscriptions/' . rawurlencode((string)$e['ref']));
+    if ($r['ok']) {
+        $sub = $r['data'];
+        /* 期間が進んでいれば更新（renew）として売上に記録 */
+        $newEnd = ts_to_jst(isset($sub['current_period_end']) ? (int)$sub['current_period_end'] : null);
+        if ($newEnd && $e['period_end'] && $newEnd > (string)$e['period_end'] && in_array((string)($sub['status'] ?? ''), ['active', 'trial'], true)) {
+            $pk = (string)$e['plan']; $amt = PAY_PLANS[$pk]['amount'] ?? 0;
+            payjp_record_payment($pdo, $aid, 'renew', $pk, $amt, '', (string)$e['ref'], 'paid', '期間更新 ' . substr($newEnd, 0, 10));
+        }
+        payjp_apply_subscription($pdo, $aid, $sub);
+    } elseif ($r['status'] === 404) {
+        /* 削除済み（キャンセル後に期間が終わった／管理画面で削除）：終了にする */
+        $pdo->prepare('UPDATE `entitlements` SET `status` = \'ended\', `until` = ?, `updated_at` = NOW(), `synced_at` = NOW() WHERE `account_id` = ? AND `app_id` = ?')->execute([date_add_days(today(), -1), $aid, APP_ID]);
+    } else {
+        $pdo->prepare('UPDATE `entitlements` SET `synced_at` = NOW() WHERE `account_id` = ? AND `app_id` = ?')->execute([$aid, APP_ID]); /* つながらない：次回に */
+    }
+    $st->execute([$aid, APP_ID]); return $st->fetch() ?: null;
+}
+
+/* ---- 手元テスト用の偽 PAY.JP（db.json に "payjp_mode": "mock"）。secrets/payjp_mock.json に状態を持つ ---- */
+function payjp_mock(string $method, string $path, array $p): array
+{
+    $file = dirname(SECRETS_FILE) . '/payjp_mock.json';
+    $db = is_readable($file) ? (json_decode((string)file_get_contents($file), true) ?: []) : [];
+    foreach (['customers', 'plans', 'subscriptions', 'charges'] as $k) $db[$k] = $db[$k] ?? [];
+    $save = function () use (&$db, $file) { file_put_contents($file, json_encode($db, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)); };
+    $err = fn(string $code, string $type, int $status, string $msg = '') => ['ok' => false, 'status' => $status, 'data' => ['code' => $code, 'type' => $type, 'status' => $status, 'message' => $msg ?: $code]];
+    $now = time(); $id = fn(string $pfx) => $pfx . '_' . bin2hex(random_bytes(12));
+    $card = function (string $tok) { return ['object' => 'card', 'id' => 'car_' . substr(md5($tok), 0, 24), 'brand' => 'Visa', 'last4' => str_ends_with($tok, '_mc') ? '4444' : '4242', 'exp_month' => 12, 'exp_year' => 2030]; };
+    $tokOk = fn(string $tok) => str_starts_with($tok, 'tok_') && !str_contains($tok, 'fail');
+    $seg = explode('/', trim($path, '/'));
+    if ($seg[0] === 'plans') {
+        if ($method === 'GET' && isset($seg[1])) return isset($db['plans'][$seg[1]]) ? ['ok' => true, 'status' => 200, 'data' => $db['plans'][$seg[1]]] : $err('invalid_id', 'client_error', 404, 'no plan');
+        if ($method === 'POST' && !isset($seg[1])) { $pid = (string)($p['id'] ?? $id('pln')); if (isset($db['plans'][$pid])) return $err('already_exist_id', 'client_error', 400); $db['plans'][$pid] = ['object' => 'plan', 'id' => $pid, 'amount' => (int)$p['amount'], 'currency' => 'jpy', 'interval' => $p['interval'], 'name' => $p['name'] ?? null, 'created' => $now, 'livemode' => false]; $save(); return ['ok' => true, 'status' => 200, 'data' => $db['plans'][$pid]]; }
+    }
+    if ($seg[0] === 'customers') {
+        if ($method === 'POST' && !isset($seg[1])) { $tok = (string)($p['card'] ?? ''); if ($tok !== '' && !$tokOk($tok)) return $err('card_declined', 'card_error', 402, 'declined'); $cid = (string)($p['id'] ?? $id('cus')); $c = ['object' => 'customer', 'id' => $cid, 'email' => $p['email'] ?? null, 'description' => $p['description'] ?? null, 'created' => $now, 'livemode' => false, 'default_card' => null, 'cards' => ['object' => 'list', 'data' => []]]; if ($tok !== '') { $cd = $card($tok); $c['cards']['data'][] = $cd; $c['default_card'] = $cd['id']; } $db['customers'][$cid] = $c; $save(); return ['ok' => true, 'status' => 200, 'data' => $c]; }
+        if (isset($seg[1]) && !isset($db['customers'][$seg[1]])) return $err('invalid_id', 'client_error', 404, 'no customer');
+        $c = &$db['customers'][$seg[1]];
+        if ($method === 'GET' && !isset($seg[2])) return ['ok' => true, 'status' => 200, 'data' => $c];
+        if ($method === 'POST' && isset($seg[2]) && $seg[2] === 'cards') { $tok = (string)($p['card'] ?? ''); if (!$tokOk($tok)) return $err('card_declined', 'card_error', 402, 'declined'); $cd = $card($tok); foreach ($c['cards']['data'] as $x) if ($x['id'] === $cd['id']) return $err('already_have_the_same_card', 'client_error', 400); $c['cards']['data'][] = $cd; if (!empty($p['default']) && $p['default'] !== 'false') $c['default_card'] = $cd['id']; $save(); return ['ok' => true, 'status' => 200, 'data' => $cd]; }
+        if ($method === 'POST' && !isset($seg[2])) { if (isset($p['default_card'])) $c['default_card'] = $p['default_card']; if (isset($p['email'])) $c['email'] = $p['email']; $save(); return ['ok' => true, 'status' => 200, 'data' => $c]; }
+    }
+    if ($seg[0] === 'subscriptions') {
+        if ($method === 'POST' && !isset($seg[1])) {
+            $cid = (string)($p['customer'] ?? ''); $pid = (string)($p['plan'] ?? '');
+            if (!isset($db['customers'][$cid])) return $err('invalid_customer', 'client_error', 400); if (!isset($db['plans'][$pid])) return $err('invalid_plan', 'client_error', 400);
+            if (empty($db['customers'][$cid]['default_card'])) return $err('doesnt_have_card', 'client_error', 400);
+            foreach ($db['subscriptions'] as $x) if ($x['customer'] === $cid && $x['plan']['id'] === $pid && $x['status'] !== 'deleted') return $err('already_subscribed', 'client_error', 400);
+            $plan = $db['plans'][$pid]; $end = $plan['interval'] === 'year' ? strtotime('+1 year', $now) : strtotime('+1 month', $now);
+            $sid = $id('sub'); $s = ['object' => 'subscription', 'id' => $sid, 'customer' => $cid, 'plan' => $plan, 'status' => 'active', 'created' => $now, 'start' => $now, 'current_period_start' => $now, 'current_period_end' => $end, 'canceled_at' => null, 'paused_at' => null, 'resumed_at' => null, 'trial_end' => null, 'livemode' => false, 'metadata' => $p['metadata'] ?? null];
+            $db['subscriptions'][$sid] = $s; $db['charges'][] = ['object' => 'charge', 'id' => $id('ch'), 'amount' => $plan['amount'], 'customer' => $cid, 'subscription' => $sid, 'paid' => true, 'created' => $now]; $save(); return ['ok' => true, 'status' => 200, 'data' => $s];
+        }
+        if (!isset($seg[1]) || !isset($db['subscriptions'][$seg[1]]) || $db['subscriptions'][$seg[1]]['status'] === 'deleted') return $err('invalid_id', 'client_error', 404, 'no subscription');
+        $s = &$db['subscriptions'][$seg[1]];
+        if ($method === 'GET') return ['ok' => true, 'status' => 200, 'data' => $s];
+        if ($method === 'POST' && isset($seg[2]) && $seg[2] === 'cancel') { if ($s['status'] === 'canceled') return $err('already_canceled', 'client_error', 400); $s['status'] = 'canceled'; $s['canceled_at'] = $now; $save(); return ['ok' => true, 'status' => 200, 'data' => $s]; }
+        if ($method === 'POST' && isset($seg[2]) && $seg[2] === 'resume') { if ($s['status'] === 'active') return $err('subscription_worked', 'client_error', 400); $s['status'] = 'active'; $s['canceled_at'] = null; $s['paused_at'] = null; $s['resumed_at'] = $now; $save(); return ['ok' => true, 'status' => 200, 'data' => $s]; }
+        if ($method === 'POST' && isset($seg[2]) && $seg[2] === 'pause') { $s['status'] = 'paused'; $s['paused_at'] = $now; $save(); return ['ok' => true, 'status' => 200, 'data' => $s]; }
+        if ($method === 'POST' && isset($seg[2]) && $seg[2] === '_renew') { $s['current_period_start'] = $s['current_period_end']; $s['current_period_end'] = $s['plan']['interval'] === 'year' ? strtotime('+1 year', $s['current_period_end']) : strtotime('+1 month', $s['current_period_end']); $save(); return ['ok' => true, 'status' => 200, 'data' => $s]; } /* テスト専用：期間更新を起こす */
+        if ($method === 'DELETE') { $s['status'] = 'deleted'; $save(); return ['ok' => true, 'status' => 200, 'data' => ['deleted' => true, 'id' => $s['id']]]; }
+    }
+    if ($seg[0] === 'charges' && $method === 'POST' && !isset($seg[1])) {
+        $tok = (string)($p['card'] ?? ''); $cid = (string)($p['customer'] ?? '');
+        if ($cid !== '' && !isset($db['customers'][$cid])) return $err('invalid_customer', 'client_error', 400);
+        if ($cid === '' && !$tokOk($tok)) return $err('card_declined', 'card_error', 402, 'declined');
+        $ch = ['object' => 'charge', 'id' => $id('ch'), 'amount' => (int)$p['amount'], 'currency' => 'jpy', 'customer' => $cid ?: null, 'paid' => true, 'captured' => true, 'created' => $now, 'description' => $p['description'] ?? null, 'card' => $card($tok ?: 'tok_saved'), 'livemode' => false];
+        $db['charges'][] = $ch; $save(); return ['ok' => true, 'status' => 200, 'data' => $ch];
+    }
+    return $err('not_found', 'client_error', 404, 'mock: ' . $method . ' ' . $path);
 }

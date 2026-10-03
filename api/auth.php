@@ -73,6 +73,7 @@ if ($action === 'me') {
     rate_limit($pdo, 'auth-me', 120, 600);
     $aid = session_account($pdo, s($o['session'] ?? '', 80));
     if (!$aid) out(['ok' => false, 'error' => 'nosession'], 401);
+    try { payjp_sync($pdo, $aid, false); } catch (Throwable $e) { /* 決済側につながらなくても、手元の記録で答える */ }
     out(['ok' => true, 'account' => account_info($pdo, $aid)]);
 }
 

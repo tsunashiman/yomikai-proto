@@ -15,6 +15,7 @@ try {
     foreach (['usage_events', 'feedback', 'daily_results'] as $t) $cnt[$t] = (int)$pdo->query('SELECT COUNT(*) FROM `' . $t . '` WHERE `app_id` = ' . $pdo->quote(APP_ID))->fetchColumn();
     $o['rows'] = $cnt;
     try { $o['adminKey'] = !empty(cfg()['admin_key']); } catch (Throwable $e) { $o['adminKey'] = false; }
+    $pc = payjp_cfg(); $o['payjp'] = $pc['enabled'] ? ($pc['mock'] ? 'mock' : $pc['mode']) : 'off'; /* off＝鍵なし（模擬のまま）、test＝テスト環境の鍵、live＝本番の鍵 */
 } catch (Throwable $e) {
     $o['ok'] = false;
     $o['db'] = 'not-ready';
