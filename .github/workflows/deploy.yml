@@ -1,0 +1,46 @@
+# さくらのレンタルサーバ（yomikai.tsunashiman.com）への自動反映
+# main に push されるたび（毎日の新作生成ルーティンの更新も含む）、このリポジトリの中身を
+# サーバーの /home/tsunashiman/www/yomikai/ に rsync で同期する。手動実行（Actions タブ → Run workflow）も可。
+# 必要な Secret：SAKURA_SSH_KEY（さくらに登録した公開鍵に対応する秘密鍵。OpenSSH 形式の全文）
+name: さくらへ反映（yomikai.tsunashiman.com）
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-sakura
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: リポジトリを取得
+        uses: actions/checkout@v4
+
+      - name: SSH 鍵を用意
+        env:
+          SAKURA_SSH_KEY: ${{ secrets.SAKURA_SSH_KEY }}
+        run: |
+          if [ -z "$SAKURA_SSH_KEY" ]; then echo "Secret SAKURA_SSH_KEY が未設定です（リポジトリの Settings → Secrets and variables → Actions）"; exit 1; fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SAKURA_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p 22 tsunashiman.sakura.ne.jp >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: www/yomikai へ同期（rsync）
+        run: |
+          rsync -rlptvz --delete --omit-dir-times --no-perms --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r \
+            --exclude '.git' --exclude '.github' --exclude 'README.md' \
+            --rsync-path=/usr/local/bin/rsync \
+            -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes" \
+            ./ tsunashiman@tsunashiman.sakura.ne.jp:/home/tsunashiman/www/yomikai/
+
+      - name: 反映の確認
+        run: |
+          sleep 3
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://yomikai.tsunashiman.com/sw.js || true)
+          echo "https://yomikai.tsunashiman.com/sw.js -> HTTP $code（DNS/SSL の反映前は失敗しても構いません）"
